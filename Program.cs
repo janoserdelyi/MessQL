@@ -18,9 +18,9 @@ public class Program
 		string[] args
 	) {
 
-		Console.WriteLine ("IsErrorRedirected : " + Console.IsErrorRedirected);
-		Console.WriteLine ("IsInputRedirected : " + Console.IsInputRedirected);
-		Console.WriteLine ("IsOutputRedirected : " + Console.IsOutputRedirected);
+		//Console.WriteLine ("IsErrorRedirected : " + Console.IsErrorRedirected);
+		//Console.WriteLine ("IsInputRedirected : " + Console.IsInputRedirected);
+		//Console.WriteLine ("IsOutputRedirected : " + Console.IsOutputRedirected);
 
 		if (Console.IsInputRedirected || Console.IsErrorRedirected || Console.IsOutputRedirected) {
 			Console.WriteLine ("Console output is being redirected. This app does not function that way. Press [enter] to exit");
@@ -94,6 +94,10 @@ public class Program
 		}, dbnameOption, hostOption, portOption, usernameOption, passwordpromptOption);
 
 		int commandParseResult = rootCommand.InvokeAsync (args).Result;
+
+		if (args.Length == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "-?")) {
+			return commandParseResult;
+		}
 
 		// look for matches in the config. first match is what gets used
 		Config? matchingConfig = null;
