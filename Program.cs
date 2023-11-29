@@ -65,8 +65,7 @@ public class Program
 
 		var usernameOption = new Option<string> (
 			name: "--username",
-			description: "database user name"//,
-											 //getDefaultValue: () => "sa"
+			description: "database user name"
 		);
 		usernameOption.AddAlias ("-u");
 
@@ -173,9 +172,6 @@ public class Program
 
 		Console.WriteLine (versionstring);
 		Console.WriteLine ();
-	// temp
-	//Console.WriteLine ("WindowWidth : " + Console.WindowWidth);
-	//Console.WriteLine ("BufferWidth : " + Console.BufferWidth);
 
 	returnAfterExit:
 
@@ -193,8 +189,6 @@ public class Program
 
 		Console.Write (prompt);
 
-		// i feel like i should change this whole program to Console.ReadKey(true); and build a buffer
-		// this would allow me to handle arrow keys
 		builder.Clear ();
 		executingQuery = null;
 		char? lastNonWhiteSpaceCharacter = null;
