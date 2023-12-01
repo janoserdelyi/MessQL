@@ -473,7 +473,8 @@ where
 						// set the last non-whitespace character
 						lastNonWhiteSpaceCharacter = previousCommand.Last ();
 
-						// clear anything that's there?
+						do { Console.Write ("\b \b"); } while (Console.CursorLeft > 0);
+						Console.Write (prompt);
 
 						// i need to handle multi-line commands
 						string[] cmdparts = builder.ToString ().Split (new char[] { '\n', '\r' });
@@ -501,6 +502,8 @@ where
 						lastNonWhiteSpaceCharacter = nextCommand.TrimEnd ().Last ();
 
 						// clear anything that's there?
+						do { Console.Write ("\b \b"); } while (Console.CursorLeft > 0);
+						Console.Write (prompt);
 
 						// i need to handle multi-line commands
 						string[] cmdparts = builder.ToString ().Split (new char[] { '\n', '\r' });
