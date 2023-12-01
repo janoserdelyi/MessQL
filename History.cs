@@ -19,24 +19,31 @@ public static class History
 	}
 
 	public static string? GetPrevious () {
-		historyOrd--;
 		if (historyOrd <= 0) {
 			return null;
 		}
 		if (history.Count == 0) {
 			return null;
 		}
+		historyOrd--;
 		return history[historyOrd];
 	}
 
 	public static string? GetNext () {
-		historyOrd++;
 		if (history.Count > 0 && historyOrd > history.Count - 1) {
 			return null;
 		}
 		if (history.Count == 0) {
 			return null;
 		}
+		historyOrd++;
+
+		// if you keep down-arrowing, put a ceiling on the ordinal, but don't keep returning the last item. return nothing
+		if (historyOrd > history.Count - 1) {
+			historyOrd = history.Count - 1;
+			return null;
+		}
+
 		return history[historyOrd];
 	}
 

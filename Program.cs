@@ -22,6 +22,7 @@ public class Program
 		//Console.WriteLine ("IsInputRedirected : " + Console.IsInputRedirected);
 		//Console.WriteLine ("IsOutputRedirected : " + Console.IsOutputRedirected);
 
+		// this is likely to change in the future
 		if (Console.IsInputRedirected || Console.IsErrorRedirected || Console.IsOutputRedirected) {
 			Console.WriteLine ("Console output is being redirected. This app does not function that way. Press [enter] to exit");
 			Console.ReadLine ();
@@ -94,6 +95,7 @@ public class Program
 
 		int commandParseResult = rootCommand.InvokeAsync (args).Result;
 
+		// show the help provided from messql, not from when connected to a database
 		if (args.Length == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "-?")) {
 			return commandParseResult;
 		}
