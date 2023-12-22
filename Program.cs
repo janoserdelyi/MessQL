@@ -774,6 +774,12 @@ Connection
 		IList<Config> configs = new List<Config> ();
 
 		foreach (string line in configlines) {
+
+			// don't parse comments
+			if (line.StartsWith('#')) {
+				continue;
+			}
+
 			string[] parts = line.Split (':');
 
 			if (parts.Length != 5) {
