@@ -4,73 +4,98 @@ namespace mssqlcli;
 
 public struct ColumnDefinitions
 {
+	// width of the " | " between display columns
+	private const int SEPARATOR_WIDTH = 3;
+	// a column is never shrunk below this unless it is naturally narrower
+	private const int MIN_SHRUNK_WIDTH = 4;
+
 	public ColumnDefinitions (
 		DataTable table,
-		int windowWidth,
-		int testDepth = 4
+		int windowWidth
 	) {
 		WindowWidth = windowWidth;
-		TestDepth = testDepth;
 		calculateColumnWidths (table);
 	}
 
 	public IList<ColumnConfig> Columns { get; } = new List<ColumnConfig> ();
 	public int WindowWidth { get; set; }
-	public int TestDepth { get; set; }
 
-	private void calculateColumnWidths (
+	private readonly void calculateColumnWidths (
 		DataTable table
 	) {
 		if (table == null) {
 			return;
 		}
 
-		// first roll through and get the column names and m in widths based on the length of the names
+		// natural width of a column : the longest of its name or any of its values (every row)
 		foreach (System.Data.DataColumn col in table.Columns) {
-			//Console.Write (col.ColumnName + " | ");
 			Columns.Add (new ColumnConfig (col.ColumnName, col.ColumnName.Length));
 		}
-		if (table.Rows.Count == 0) {
-			goto proportionalWidthCalc;
-		}
-
-		// now for a number of rows as defined by the test depth, check the value lengths
-		int curDepth = 0;
 
 		foreach (System.Data.DataRow row in table.Rows) {
-
-			if (curDepth > TestDepth) {
-				break;
-			}
-
 			for (int i = 0; i < row.ItemArray.Length; i++) {
-				if (row.ItemArray[i] == null) {
-					continue;
-				}
-				if (row.ItemArray[i]!.ToString ()!.Length > Columns[i].Width) {
-					Columns[i].Width = row.ItemArray[i]!.ToString ()!.Length;
+				int len = row.ItemArray[i]?.ToString ()?.Length ?? 0;
+				if (len > Columns[i].Width) {
+					Columns[i].Width = len;
 				}
 			}
-
-			curDepth++;
 		}
 
-	proportionalWidthCalc:
+		if (Columns.Count == 0) {
+			return;
+		}
 
-		int rawWidthSum = Columns.Sum ((w) => { return w.Width; });
+		// space left for data once the separators are accounted for. one less than the window
+		// so a full-width row doesn't wrap the cursor onto the next line
+		int available = WindowWidth - ((Columns.Count - 1) * SEPARATOR_WIDTH) - 1;
+		int[] natural = Columns.Select ((c) => c.Width).ToArray ();
 
-		// the total width (windowwidth) needs to be taken down a notch due to rendering concerns
-		// between each display column is a " | "
-		WindowWidth = WindowWidth - ((Columns.Count - 1) * 3);
+		if (natural.Sum () <= available) {
+			// everything fits. no stretching, no truncating
+			return;
+		}
 
-		// now calc for proportions against the window width
-		// if anything ends up being less than the name width, maintain the name width
+		// doesn't fit : shrink the widest columns first. find the largest cap such that
+		// every column capped at it (but never below its floor) fits in the window
+		int[] floors = natural.Select ((w) => Math.Min (w, MIN_SHRUNK_WIDTH)).ToArray ();
+
+		int lo = 0;
+		int hi = natural.Max ();
+		while (lo < hi) {
+			int mid = (lo + hi + 1) / 2;
+			if (widthAtCap (natural, floors, mid) <= available) {
+				lo = mid;
+			} else {
+				hi = mid - 1;
+			}
+		}
+
+		int cap = lo;
+
 		for (int i = 0; i < Columns.Count; i++) {
-			int newwidth = (Columns[i].Width * WindowWidth) / rawWidthSum;
+			Columns[i].Width = Math.Min (natural[i], Math.Max (cap, floors[i]));
+		}
 
-			if (newwidth > Columns[i].Name.Length) {
-				Columns[i].Width = newwidth;
+		// hand out any leftover space (less than one column's worth) to columns that were cut
+		int slack = available - Columns.Sum ((c) => c.Width);
+		for (int i = 0; i < Columns.Count && slack > 0; i++) {
+			if (Columns[i].Width < natural[i]) {
+				Columns[i].Width++;
+				slack--;
 			}
 		}
+	}
+
+	private static int widthAtCap (
+		int[] natural,
+		int[] floors,
+		int cap
+	) {
+		int sum = 0;
+		for (int i = 0; i < natural.Length; i++) {
+			sum += Math.Min (natural[i], Math.Max (cap, floors[i]));
+		}
+
+		return sum;
 	}
 }

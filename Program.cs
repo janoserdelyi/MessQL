@@ -1,12 +1,7 @@
 ﻿using System.CommandLine;
-using System.ComponentModel.Design;
+using System.CommandLine.Help;
 using System.Data;
-using System.Linq;
-using System.Net;
 using System.Text;
-using System.Timers;
-using Azure.Core;
-using Azure.Core.Extensions;
 using com.janoserdelyi.DataSource;
 using Microsoft.Data.SqlClient;
 
@@ -25,7 +20,7 @@ public class Program
 		// this is likely to change in the future
 		if (Console.IsInputRedirected || Console.IsErrorRedirected || Console.IsOutputRedirected) {
 			Console.WriteLine ("Console output is being redirected. This app does not function that way. Press [enter] to exit");
-			Console.ReadLine ();
+			_ = Console.ReadLine ();
 			return -1;
 		}
 
@@ -34,7 +29,7 @@ public class Program
 		/*
 		psql options i'll be implementing:
 		-d, --dbname=DBNAME      database name to connect to
-		-h, --host=HOSTNAME      database server host or socket directory 
+		-h, --host=HOSTNAME      database server host or socket directory
 		-p, --port=PORT          database server port (default: "5432")
 		-U, --username=USERNAME  database user name (default: "janos")
 		-W, --password           force password prompt (should happen automatically)
@@ -44,59 +39,54 @@ public class Program
 
 		var configs = parseConfig ();
 
-		var dbnameOption = new Option<string> (
-			name: "--dbname",
-			description: "database name to connect to"
-		);
-		dbnameOption.AddAlias ("-d");
+		var dbnameOption = new Option<string> ("--dbname", "-d") {
+			Description = "database name to connect to"
+		};
 
-		var hostOption = new Option<string> (
-			name: "--host",
-			description: "database server host",
-			getDefaultValue: () => "locahost"
-		);
-		hostOption.AddAlias ("-h");
+		var hostOption = new Option<string> ("--host", "-h") {
+			Description = "database server host",
+			DefaultValueFactory = _ => "localhost"
+		};
 
-		var portOption = new Option<int> (
-			name: "--port",
-			description: "database server port (default: \"1433\")",
-			getDefaultValue: () => 1433
-		);
-		portOption.AddAlias ("-p");
+		var portOption = new Option<int> ("--port", "-p") {
+			Description = "database server port (default: \"1433\")",
+			DefaultValueFactory = _ => 1433
+		};
 
-		var usernameOption = new Option<string> (
-			name: "--username",
-			description: "database user name"
-		);
-		usernameOption.AddAlias ("-u");
+		var usernameOption = new Option<string> ("--username", "-u") {
+			Description = "database user name"
+		};
 
-		var passwordpromptOption = new Option<bool> (
-			name: "--password",
-			description: "force password prompt (should happen automatically)",
-			getDefaultValue: () => false
-		);
-		passwordpromptOption.AddAlias ("-W");
+		var passwordpromptOption = new Option<bool> ("--password", "-W") {
+			Description = "force password prompt (should happen automatically)",
+			DefaultValueFactory = _ => false
+		};
 
-		rootCommand.AddOption (dbnameOption);
-		rootCommand.AddOption (hostOption);
-		rootCommand.AddOption (portOption);
-		rootCommand.AddOption (usernameOption);
-		rootCommand.AddOption (passwordpromptOption);
+		rootCommand.Options.Add (dbnameOption);
+		rootCommand.Options.Add (hostOption);
+		rootCommand.Options.Add (portOption);
+		rootCommand.Options.Add (usernameOption);
+		rootCommand.Options.Add (passwordpromptOption);
+
+		// System.CommandLine's built-in help option claims "-h", which shadows --host.
+		// like psql, "-h" means host. help stays available as "--help" and "-?"
+		var helpOption = rootCommand.Options.OfType<HelpOption> ().First ();
+		_ = helpOption.Aliases.Remove ("-h");
 
 		var optionsConfig = new ConfigExtension ();
 
-		rootCommand.SetHandler ((dbnameValue, hostValue, portValue, usernameValue, passwordpromptValue) => {
-			optionsConfig.Database = dbnameValue?.Trim ();
-			optionsConfig.Host = hostValue?.Trim ();
-			optionsConfig.Port = portValue;
-			optionsConfig.User = usernameValue?.Trim ();
-			optionsConfig.PasswordPrompt = passwordpromptValue;
-		}, dbnameOption, hostOption, portOption, usernameOption, passwordpromptOption);
+		rootCommand.SetAction (parseResult => {
+			optionsConfig.Database = parseResult.GetValue (dbnameOption)?.Trim ();
+			optionsConfig.Host = parseResult.GetValue (hostOption)?.Trim ();
+			optionsConfig.Port = parseResult.GetValue (portOption);
+			optionsConfig.User = parseResult.GetValue (usernameOption)?.Trim ();
+			optionsConfig.PasswordPrompt = parseResult.GetValue (passwordpromptOption);
+		});
 
-		int commandParseResult = rootCommand.InvokeAsync (args).Result;
+		int commandParseResult = rootCommand.Parse (args).Invoke ();
 
 		// show the help provided from messql, not from when connected to a database
-		if (args.Length == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "-?")) {
+		if (args.Length == 1 && (args[0] == "--help" || args[0] == "-?")) {
 			return commandParseResult;
 		}
 
@@ -108,9 +98,11 @@ public class Program
 				if (config.Database != optionsConfig.Database) {
 					continue;
 				}
+
 				if (config.Port != optionsConfig.Port) {
 					continue;
 				}
+
 				if (config.Host != optionsConfig.Host) {
 					continue;
 				}
@@ -127,9 +119,11 @@ public class Program
 		}
 
 		if (matchingConfig != null) {
-			if (string.IsNullOrEmpty (matchingConfig.Password)) {
+			// a blank user means integrated security (kerberos). no password needed
+			if (!string.IsNullOrEmpty (matchingConfig.User) && string.IsNullOrEmpty (matchingConfig.Password)) {
 				optionsConfig.PasswordPrompt = true;
 			}
+
 			optionsConfig.User = matchingConfig.User;
 			optionsConfig.Password = matchingConfig.Password;
 		}
@@ -150,24 +144,35 @@ public class Program
 		// clear the buffer
 		Console.Clear ();
 
-		// try to connect. yes this is one big procedural mess
-		ConnectionPropertyBag mssqlConnection = new ConnectionPropertyBag () {
-			DatabaseType = DatabaseType.MSSQL,
-			Name = "mssql",
-			Server = optionsConfig.Host,
-			Database = optionsConfig.Database,
-			Username = optionsConfig.User,
-			Password = optionsConfig.Password,
-			Port = optionsConfig.Port.ToString ()
+		// DataSource's ConnectionPropertyBag can't express TrustServerCertificate or ApplicationIntent
+		// for MSSQL (and ignores Port), so the connection string is built with SqlConnectionStringBuilder.
+		// no username => Integrated Security (Kerberos ticket, no password)
+		var connectionStringBuilder = new SqlConnectionStringBuilder () {
+			DataSource = $"tcp:{optionsConfig.Host},{optionsConfig.Port}",
+			InitialCatalog = optionsConfig.Database ?? string.Empty,
+			Encrypt = SqlConnectionEncryptOption.Mandatory,
+			// set to false if the internal CA is installed
+			TrustServerCertificate = true,
+			ConnectTimeout = 15,
+			ApplicationIntent = ApplicationIntent.ReadOnly
 		};
-		ConnectionManager.Instance.AddConnection (mssqlConnection);
+
+		if (string.IsNullOrEmpty (optionsConfig.User)) {
+			connectionStringBuilder.IntegratedSecurity = true;
+		} else {
+			connectionStringBuilder.UserID = optionsConfig.User;
+			connectionStringBuilder.Password = optionsConfig.Password ?? string.Empty;
+		}
+
+		string connectionString = connectionStringBuilder.ConnectionString;
 
 		// test the connection. output some version info
-		string? versionstring = new Connect ("mssql").Query ("select @@version as version;").Go<string?> ((cmd) => {
+		string? versionstring = new Connect (new Connection (new SqlConnection (connectionString), new ConnectionPropertyBag () { DatabaseType = DatabaseType.MSSQL, Name = "mssql" })).Query ("select @@version as version;").Go<string?> ((cmd) => {
 			using (IDataReader dr = cmd.ExecuteReader ()) {
 				if (dr.Read ()) {
-					return cmd.DRH.GetString ("version");
+					return cmd.DRH!.GetString ("version");
 				}
+
 				return null;
 			}
 		});
@@ -191,7 +196,7 @@ public class Program
 
 		Console.Write (prompt);
 
-		builder.Clear ();
+		_ = builder.Clear ();
 		executingQuery = null;
 		char? lastNonWhiteSpaceCharacter = null;
 
@@ -199,10 +204,13 @@ public class Program
 			while (true) {
 
 				bool tableDefinition = false;
+				string tableDefinitionName = string.Empty;
+				bool showSource = false;
+				string sourceName = string.Empty;
 
 				var input = Console.ReadKey (intercept: true);
 
-				if (!Char.IsWhiteSpace (input.KeyChar)) {
+				if (!char.IsWhiteSpace (input.KeyChar)) {
 					lastNonWhiteSpaceCharacter = input.KeyChar;
 				}
 
@@ -247,15 +255,15 @@ public class Program
 						continue;
 					}
 
-					builder.Append (input.KeyChar);
+					_ = builder.Append (input.KeyChar);
 
 					// check if the first character in the buffer is a \
 					// if so it's a special command
 					if (builder[0] == '\\') {
 
-						(string cmd, string? param) res = parseMacro (builder.ToString ());
+						(string cmd, string? param) = parseMacro (builder.ToString ());
 
-						switch (res.cmd) {
+						switch (cmd) {
 							case @"\q":
 								Console.WriteLine ();
 								Console.WriteLine ("exiting");
@@ -276,24 +284,25 @@ public class Program
 									Console.WriteLine ("Expanded display is off.");
 									expandedDisplay = false;
 								}
+
 								break;
 							case @"\dt":
-								if (string.IsNullOrEmpty (res.param) || res.param == "*") {
+								if (string.IsNullOrEmpty (param) || param == "*") {
 									// all tables in all schemas
 									/*
 														  List of relations
-									 Schema |              Name              | Type  |    Owner     
+									 Schema |              Name              | Type  |    Owner
 									--------+--------------------------------+-------+--------------
 									 public | ab_template                    | table | nestinyadmin
 									 public | accessrole                     | table | nestinyadmin
 									*/
 									executingQuery = $"select s.name as [schema_name], t.name as [table_name], t.type_desc from sys.schemas s join sys.tables t on t.schema_id = s.schema_id order by s.name, t.name;";
 								} else {
-									if (res.param.Contains ('.') == false) {
+									if (param.Contains ('.') == false) {
 										// all tables in a schema
-										executingQuery = $"select s.name as [schema_name], t.name as [table_name], t.type_desc from sys.schemas s join sys.tables t on t.schema_id = s.schema_id where s.name = '{res.param}' order by t.name;";
+										executingQuery = $"select s.name as [schema_name], t.name as [table_name], t.type_desc from sys.schemas s join sys.tables t on t.schema_id = s.schema_id where s.name = '{param}' order by t.name;";
 									} else {
-										string[] dtparts = res.param.Split ('.');
+										string[] dtparts = param.Split ('.');
 										if (dtparts[1] == "*" || dtparts[1] == "") {
 											// all tables in a schema. again
 											executingQuery = $"select s.name as [schema_name], t.name as [table_name], t.type_desc from sys.schemas s join sys.tables t on t.schema_id = s.schema_id where s.name = '{dtparts[0]}' order by t.name;";
@@ -311,34 +320,36 @@ public class Program
 								break;
 							case @"\d":
 							case @"\d+":
-								if (string.IsNullOrEmpty (res.param)) {
+								if (string.IsNullOrEmpty (param)) {
 									Console.WriteLine ();
 									Console.WriteLine ("\\d commands require schema.tablename");
 									break;
 								}
 
-								if (res.param.EndsWith (";")) {
-									res.param = res.param.TrimEnd (';');
+								if (param.EndsWith (";")) {
+									param = param.TrimEnd (';');
 								}
 
 								tableDefinition = true;
 
-								if (res.param.IndexOf ('.') == -1) {
-									res.param = "dbo." + res.param;
+								if (param.IndexOf ('.') == -1) {
+									param = "dbo." + param;
 								}
-								string[] dparts = res.param.Split ('.');
+
+								string[] dparts = param.Split ('.');
+								tableDefinitionName = param;
 
 								string columndefs = "ORDINAL_POSITION as [Ord], COLUMN_NAME as [Column], DATA_TYPE as [Type], CHARACTER_MAXIMUM_LENGTH as [Maxlen], IS_NULLABLE as [Nullable], COLUMN_DEFAULT as [Default]";
 
-								if (res.cmd.EndsWith ("+")) {
-									columndefs = columndefs + ", CHARACTER_SET_NAME as [Charset], CCOLLATION_NAME as [Collation]";
+								if (cmd.EndsWith ("+")) {
+									columndefs += ", CHARACTER_SET_NAME as [Charset], COLLATION_NAME as [Collation]";
 								}
 
 								executingQuery = $"select {columndefs} FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{dparts[0]}' and TABLE_NAME = '{dparts[1]}';";
 
-								executingQuery += $"select name, type_desc, is_unique, is_primary_key from sys.indexes where [object_id] = OBJECT_ID('{res.param}');";
+								executingQuery += $"select name, type_desc, is_unique, is_primary_key from sys.indexes where [object_id] = OBJECT_ID('{param}');";
 								// FK's
-								executingQuery += $@"SELECT  
+								executingQuery += $@"SELECT
 	obj.object_id as [objid],
 	obj.name AS FK_NAME,
     sch1.name AS [schema_name],
@@ -347,7 +358,7 @@ public class Program
 	sch2.name AS [referenced_schema_name],
     tab2.name AS [referenced_table],
     col2.name AS [referenced_column]
-FROM 
+FROM
 	sys.foreign_key_columns fkc
 	INNER JOIN sys.objects obj ON obj.object_id = fkc.constraint_object_id
 	INNER JOIN sys.tables tab1 ON tab1.object_id = fkc.parent_object_id
@@ -357,7 +368,7 @@ FROM
 	INNER JOIN sys.schemas sch2 ON tab2.schema_id = sch2.schema_id
 	INNER JOIN sys.columns col2 ON col2.column_id = referenced_column_id AND col2.object_id = tab2.object_id
 where
-	fkc.parent_object_id = OBJECT_ID('{res.param}');";
+	fkc.parent_object_id = OBJECT_ID('{param}');";
 
 								/*
 	SELECT CONSTRAINT_NAME
@@ -379,17 +390,58 @@ where
 
 								break;
 							case @"\dn":
-								if (string.IsNullOrEmpty (res.param) || res.param == "*") {
+								if (string.IsNullOrEmpty (param) || param == "*") {
 									executingQuery = "select * from sys.schemas order by principal_id, name;";
 								} else {
-									if (res.param.Contains ('*')) {
+									if (param.Contains ('*')) {
 										// wildcard the table name
-										res.param = res.param.Replace ('*', '%');
-										executingQuery = $"select * from sys.schemas where name like '{res.param}' order by principal_id, name;";
+										param = param.Replace ('*', '%');
+										executingQuery = $"select * from sys.schemas where name like '{param}' order by principal_id, name;";
 									} else {
-										executingQuery = $"select * from sys.schemas where name = '{res.param}';";
+										executingQuery = $"select * from sys.schemas where name = '{param}';";
 									}
 								}
+
+								break;
+							case @"\df":
+							case @"\dfs":
+								// list functions and stored procedures. \dfS includes system objects
+								{
+									string? dfSchema = null;
+									string? dfName = null;
+									string dfParam = (param ?? string.Empty).TrimEnd (';');
+
+									if (dfParam.Contains ('.')) {
+										string[] dfparts = dfParam.Split ('.', 2);
+										dfSchema = dfparts[0];
+										dfName = dfparts[1];
+									} else if (dfParam != string.Empty) {
+										dfName = dfParam;
+									}
+
+									string dfWhere = "o.type in ('P','PC','FN','IF','TF','FS','FT','AF','X')";
+									if (cmd == @"\df") {
+										dfWhere += " and o.is_ms_shipped = 0";
+									}
+
+									dfWhere += likeClause ("s.name", dfSchema);
+									dfWhere += likeClause ("o.name", dfName);
+
+									executingQuery = $"select s.name as [schema_name], o.name as [name], case o.type when 'P' then 'procedure' when 'PC' then 'procedure (clr)' when 'X' then 'procedure (extended)' when 'AF' then 'aggregate' when 'FN' then 'function (scalar)' when 'FS' then 'function (clr scalar)' when 'IF' then 'function (inline table)' when 'TF' then 'function (table)' when 'FT' then 'function (clr table)' else o.type_desc end as [type] from sys.objects o join sys.schemas s on s.schema_id = o.schema_id where {dfWhere} order by s.name, o.name;";
+								}
+
+								break;
+							case @"\sf":
+								// show the source of a function or stored procedure
+								if (string.IsNullOrEmpty (param)) {
+									Console.WriteLine ();
+									Console.WriteLine ("\\sf requires a function or procedure name");
+									break;
+								}
+
+								sourceName = param.TrimEnd (';');
+								showSource = true;
+								executingQuery = $"select m.definition from sys.sql_modules m where m.[object_id] = OBJECT_ID('{sourceName.Replace ("'", "''")}');";
 								break;
 							case @"\conninfo":
 								// You are connected to database "nestiny" as user "nestinyadmin" on host "localhost" (address "::1") at port "54320".
@@ -403,10 +455,10 @@ where
 						}
 
 						//goto start;
-						builder.Clear ();
+						_ = builder.Clear ();
 					}
 
-					// Enter can be for multi-line. check that the last non-whitespace character was a semi-colon. 
+					// Enter can be for multi-line. check that the last non-whitespace character was a semi-colon.
 					// if semi-colon it's time to execute. also store command history
 					if (lastNonWhiteSpaceCharacter == ';' || executingQuery != null) {
 						// eval the query
@@ -421,15 +473,16 @@ where
 							executingQuery = builder.ToString ();
 						}
 
-						// Assumes that connection is a valid SqlConnection object.  
+						// Assumes that connection is a valid SqlConnection object.
 						// replace all carriage returns and line feeds with a space. prevent problems with multi-line queries
 						if (executingQuery != null) {
 
 							executingQuery = executingQuery.Replace ('\n', ' ').Replace ('\r', ' ');
 
-							using var adapter = new SqlDataAdapter (executingQuery, (Microsoft.Data.SqlClient.SqlConnection)ConnectionManager.Instance.GetConnection ("mssql").BaseConnection);
+							using var sqlConnection = new SqlConnection (connectionString);
+							using var adapter = new SqlDataAdapter (executingQuery, sqlConnection);
 							using var dataset = new DataSet ();
-							adapter.Fill (dataset);
+							_ = adapter.Fill (dataset);
 
 							if (dataset.Tables.Count == 0) {
 								Console.WriteLine ("no results found");
@@ -437,12 +490,18 @@ where
 								goto start;
 							}
 
-							if (tableDefinition == true) {
-								Console.WriteLine (displayTableDefinition (dataset));
+							if (showSource == true) {
+								object? source = dataset.Tables[0].Rows.Count > 0 ? dataset.Tables[0].Rows[0][0] : null;
+								if (source == null || source == DBNull.Value) {
+									Console.WriteLine ($"no source found for \"{sourceName}\" (does not exist, has no T-SQL source, or is encrypted)");
+								} else {
+									Console.WriteLine (source.ToString ());
+								}
+							} else if (tableDefinition == true) {
+								Console.WriteLine (displayTableDefinition (dataset, tableDefinitionName));
 							} else {
 								Console.WriteLine (displayResults (dataset.Tables[0], expandedDisplay));
 							}
-
 						}
 
 						goto start;
@@ -468,8 +527,8 @@ where
 					string? previousCommand = History.GetPrevious ();
 
 					if (!string.IsNullOrEmpty (previousCommand)) {
-						builder.Clear ();
-						builder.Append (previousCommand);
+						_ = builder.Clear ();
+						_ = builder.Append (previousCommand);
 						// set the last non-whitespace character
 						lastNonWhiteSpaceCharacter = previousCommand.Last ();
 
@@ -485,19 +544,20 @@ where
 							//Console.CursorLeft = prompt.Length;
 							Console.Write (cmdparts[i]);
 							if (i < cmdparts.Length - 1) {
-								Console.Write (System.Environment.NewLine);
+								Console.Write (Environment.NewLine);
 							}
 						}
 					}
 
 					continue;
 				}
+
 				if (input.Key == ConsoleKey.DownArrow) {
 					string? nextCommand = History.GetNext ();
 
 					if (!string.IsNullOrEmpty (nextCommand)) {
-						builder.Clear ();
-						builder.Append (nextCommand);
+						_ = builder.Clear ();
+						_ = builder.Append (nextCommand);
 						// set the last non-whitespace character
 						lastNonWhiteSpaceCharacter = nextCommand.TrimEnd ().Last ();
 
@@ -514,13 +574,14 @@ where
 							//Console.CursorLeft = prompt.Length;
 							Console.Write (cmdparts[i]);
 							if (i < cmdparts.Length - 1) {
-								Console.Write (System.Environment.NewLine);
+								Console.Write (Environment.NewLine);
 							}
 						}
 					}
 
 					continue;
 				}
+
 				if (input.Key == ConsoleKey.LeftArrow) {
 					// this can get prety hairy. i need to track the position in the builder too
 					// and with multi-line it gets even more wonky
@@ -531,12 +592,13 @@ where
 					//Console.CursorLeft--;
 					continue;
 				}
+
 				if (input.Key == ConsoleKey.RightArrow) {
 					//input = Console.ReadKey (intercept: true);
 					continue;
 				}
 
-				builder.Append (input.KeyChar);
+				_ = builder.Append (input.KeyChar);
 				Console.Write (input.KeyChar);
 
 			}
@@ -545,8 +607,6 @@ where
 			goto returnAfterExit;
 		}
 		// finally? some cleanup/disposal/console reset?
-
-
 
 		return commandParseResult;
 	}
@@ -562,7 +622,7 @@ where
 
 		var columnDefs = new ColumnDefinitions (table, windowwidth);
 
-		StringBuilder sb = new StringBuilder ();
+		var sb = new StringBuilder ();
 
 		if (expandedDisplay) {
 			// get widest name
@@ -571,34 +631,37 @@ where
 
 			int rownum = 1;
 			foreach (System.Data.DataRow row in table.Rows) {
-				sb.AppendLine ($"-[ RECORD {rownum} ]".PadRight (windowwidth, '-'));
+				_ = sb.AppendLine ($"-[ RECORD {rownum} ]".PadRight (windowwidth, '-'));
 
 				string[] names = columnDefs.Columns.ToList<ColumnConfig> ().Select ((el) => { return el.Name.PadRight (widestnamewidth); }).ToArray<string> ();
 
 				for (int i = 0; i < row.ItemArray.Length; i++) {
-					sb.Append (names[i]).Append (" | ").Append (safeTruncAndPad (row.ItemArray[i]?.ToString (), datawidth)).Append (System.Environment.NewLine);
+					_ = sb.Append (names[i]).Append (" | ").Append (SafeTruncAndPad (row.ItemArray[i]?.ToString (), datawidth)).Append (Environment.NewLine);
 				}
+
 				rownum++;
 			}
 		} else {
-			string[] names = columnDefs.Columns.ToList<ColumnConfig> ().Select ((el) => { return el.Name.PadRight (el.Width); }).ToArray<string> ();
+			string[] names = columnDefs.Columns.ToList<ColumnConfig> ().Select ((el) => { return SafeTruncAndPad (el.Name, el.Width); }).ToArray<string> ();
 
-			sb.AppendLine (string.Join<string> (" | ", names));
-			sb.AppendLine ("-".PadRight (windowwidth, '-'));
+			_ = sb.AppendLine (string.Join<string> (" | ", names));
+			_ = sb.AppendLine ("-".PadRight (windowwidth, '-'));
 
 			foreach (System.Data.DataRow row in table.Rows) {
 				for (int i = 0; i < row.ItemArray.Length; i++) {
 					if (i > 0) {
-						sb.Append (" | ");
+						_ = sb.Append (" | ");
 					}
-					sb.Append (safeTruncAndPad (row.ItemArray[i]?.ToString (), columnDefs.Columns[i].Width));
+
+					_ = sb.Append (SafeTruncAndPad (row.ItemArray[i]?.ToString (), columnDefs.Columns[i].Width));
 				}
-				sb.Append (System.Environment.NewLine);
+
+				_ = sb.Append (Environment.NewLine);
 			}
 		}
 
-		sb.AppendLine ();
-		sb.AppendLine ($"rows ({rowcount})");
+		_ = sb.AppendLine ();
+		_ = sb.AppendLine ($"rows ({rowcount})");
 
 		return sb.ToString ();
 	}
@@ -607,15 +670,15 @@ where
 	NON-expanded example from postgresql
 
 									 Table "vault.account"
-			   Column            |           Type           | Collation | Nullable | Default 
+			   Column            |           Type           | Collation | Nullable | Default
 	-----------------------------+--------------------------+-----------+----------+---------
-	 id                          | text                     |           | not null | 
-	 name                        | text                     |           | not null | 
-	 account_type                | text                     |           | not null | 
+	 id                          | text                     |           | not null |
+	 name                        | text                     |           | not null |
+	 account_type                | text                     |           | not null |
 	 active                      | boolean                  |           | not null | true
 	 create_dt                   | timestamp with time zone |           | not null | now()
 	 available_balance           | numeric(13,2)            |           | not null | 0
-	 account_num_hint            | text                     |           | not null | 
+	 account_num_hint            | text                     |           | not null |
 	 available_balance_update_dt | timestamp with time zone |           | not null | now()
 	Indexes:
 		"account_pkey" PRIMARY KEY, btree (id)
@@ -649,74 +712,77 @@ where
 	available_balance_update_dt | 2021-10-22 10:44:02.119291+00
 	*/
 	private static string displayTableDefinition (
-		DataSet dataset
+		DataSet dataset,
+		string tableName
 	) {
 		int windowwidth = Console.WindowWidth;
 
 		var columnDefs = new ColumnDefinitions (dataset.Tables[0], windowwidth);
 
-		StringBuilder sb = new StringBuilder ();
+		var sb = new StringBuilder ();
 
-		sb.AppendLine ($"Table '{dataset.Tables[0].TableName}'");
+		_ = sb.AppendLine ($"Table \"{tableName}\"");
 
-		string[] names = columnDefs.Columns.ToList<ColumnConfig> ().Select ((el) => { return el.Name.PadRight (el.Width); }).ToArray<string> ();
+		string[] names = columnDefs.Columns.ToList<ColumnConfig> ().Select ((el) => { return SafeTruncAndPad (el.Name, el.Width); }).ToArray<string> ();
 
-		sb.AppendLine (string.Join<string> (" | ", names));
-		sb.AppendLine ("-".PadRight (windowwidth, '-'));
+		_ = sb.AppendLine (string.Join<string> (" | ", names));
+		_ = sb.AppendLine ("-".PadRight (windowwidth, '-'));
 
 		foreach (System.Data.DataRow row in dataset.Tables[0].Rows) {
 			for (int i = 0; i < row.ItemArray.Length; i++) {
 				if (i > 0) {
-					sb.Append (" | ");
+					_ = sb.Append (" | ");
 				}
-				sb.Append (safeTruncAndPad (row.ItemArray[i]?.ToString (), columnDefs.Columns[i].Width));
+
+				_ = sb.Append (SafeTruncAndPad (row.ItemArray[i]?.ToString (), columnDefs.Columns[i].Width));
 			}
-			sb.Append (System.Environment.NewLine);
+
+			_ = sb.Append (Environment.NewLine);
 		}
 
-		sb.AppendLine ();
+		_ = sb.AppendLine ();
 
-		sb.AppendLine ("Indexes:");
+		_ = sb.AppendLine ("Indexes:");
 
 		if (dataset.Tables[1].Rows.Count == 0) {
-			sb.AppendLine ("    No indexes");
+			_ = sb.AppendLine ("    No indexes");
 		} else {
 			foreach (System.Data.DataRow row in dataset.Tables[1].Rows) {
-				sb.AppendLine ($"    \"{row.ItemArray[0]}\" {row.ItemArray[1]} {(row.ItemArray[3]!.ToString () == "True" ? "PRIMARY KEY" : (row.ItemArray[2]!.ToString () == "True" ? "UNIQUE" : ""))}");
+				_ = sb.AppendLine ($"    \"{row.ItemArray[0]}\" {row.ItemArray[1]} {(row.ItemArray[3]!.ToString () == "True" ? "PRIMARY KEY" : (row.ItemArray[2]!.ToString () == "True" ? "UNIQUE" : ""))}");
 			}
 		}
 
-		sb.AppendLine ("Referenced by:");
+		_ = sb.AppendLine ("Referenced by:");
 
 		if (dataset.Tables[2].Rows.Count == 0) {
-			sb.AppendLine ("    No foreign keys");
+			_ = sb.AppendLine ("    No foreign keys");
 		} else {
 			foreach (System.Data.DataRow row in dataset.Tables[2].Rows) {
-				sb.AppendLine ($"    TABLE \"{row.ItemArray[5]}.{row.ItemArray[6]}\" CONSTRAINT \"{row.ItemArray[1]}\" FOREIGN KEY ({row.ItemArray[7]}) REFERENCES {row.ItemArray[2]}.{row.ItemArray[3]}({row.ItemArray[4]})");
+				_ = sb.AppendLine ($"    TABLE \"{row.ItemArray[5]}.{row.ItemArray[6]}\" CONSTRAINT \"{row.ItemArray[1]}\" FOREIGN KEY ({row.ItemArray[7]}) REFERENCES {row.ItemArray[2]}.{row.ItemArray[3]}({row.ItemArray[4]})");
 			}
 		}
 
 		return sb.ToString ();
 	}
 
-	// truncate to fit a column width
-	public static string safeTruncAndPad (
+	// pad to a column width, or truncate to fit it. truncated values end in an ellipsis
+	public static string SafeTruncAndPad (
 		string? val,
 		int width
 	) {
+		if (width <= 0) {
+			return string.Empty;
+		}
+
 		if (string.IsNullOrEmpty (val)) {
 			return "".PadRight (width);
 		}
 
-		if (val.Length < width) {
+		if (val.Length <= width) {
 			return val.PadRight (width);
 		}
 
-		if (val.Length == width) {
-			return val;
-		}
-
-		return val.Substring (0, width);
+		return val.Substring (0, width - 1) + "\u2026";
 	}
 
 	private static (string cmd, string? param) parseMacro (
@@ -728,19 +794,37 @@ where
 		return (parts[0].ToLower (), parts.Length > 1 ? parts[1] : null);
 	}
 
-	private static string stripPrompt (
-		ConfigExtension config,
-		string input
+	// builds an " and col = 'x'" / " and col like 'x%'" fragment. '*' is the wildcard. null/empty/'*' means no filter
+	private static string likeClause (
+		string column,
+		string? pattern
 	) {
-		return input.Replace ($"{config.Database}=# ", "");
+		if (string.IsNullOrEmpty (pattern) || pattern == "*") {
+			return string.Empty;
+		}
+
+		string escaped = pattern.Replace ("'", "''");
+
+		if (escaped.Contains ('*')) {
+			return $" and {column} like '{escaped.Replace ('*', '%')}'";
+		}
+
+		return $" and {column} = '{escaped}'";
 	}
+
+	// private static string stripPrompt (
+	// 	ConfigExtension config,
+	// 	string input
+	// ) {
+	// 	return input.Replace ($"{config.Database}=# ", "");
+	// }
 
 	private static string writeHelp () {
 		return @"General
 	\q                      quit mssqlcli
 
 Help
-	\?                      show this help	
+	\?                      show this help
 
 Informational
 	(options: S = show system objects, + = additional detail)
@@ -748,6 +832,8 @@ Informational
   	\d[S+]  NAME            describe table, view, sequence, or index
 	\dt                     describe tables
 	\dn     [PATTERN]       list schemas
+	\df[S]  [PATTERN]       list functions and stored procedures (PATTERN: name or schema.name, * wildcard)
+	\sf     NAME            show the source of a function or stored procedure
 
 Connection
   \conninfo display information about current connection
@@ -776,7 +862,7 @@ Connection
 		foreach (string line in configlines) {
 
 			// don't parse comments
-			if (line.StartsWith('#')) {
+			if (line.StartsWith ('#')) {
 				continue;
 			}
 
@@ -787,8 +873,7 @@ Connection
 				continue;
 			}
 
-			int port;
-			if (!int.TryParse (parts[1], out port)) {
+			if (!int.TryParse (parts[1], out var port)) {
 				Console.WriteLine ($"port `{parts[1]}` does not convert to an integer. skipping");
 				continue;
 			}

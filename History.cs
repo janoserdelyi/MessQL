@@ -8,49 +8,54 @@ public static class History
 		if (string.IsNullOrEmpty (cmd)) {
 			return;
 		}
-		if (history.Contains (cmd)) { // no dupes
+
+		if (_history.Contains (cmd)) { // no dupes
 			return;
 		}
 
 		cmd = cmd.TrimEnd ();
 
-		history.Add (cmd);
-		historyOrd = history.Count;
+		_history.Add (cmd);
+		_historyOrd = _history.Count;
 	}
 
 	public static string? GetPrevious () {
-		if (historyOrd <= 0) {
+		if (_historyOrd <= 0) {
 			return null;
 		}
-		if (history.Count == 0) {
+
+		if (_history.Count == 0) {
 			return null;
 		}
-		historyOrd--;
-		return history[historyOrd];
+
+		_historyOrd--;
+		return _history[_historyOrd];
 	}
 
 	public static string? GetNext () {
-		if (history.Count > 0 && historyOrd > history.Count - 1) {
+		if (_history.Count > 0 && _historyOrd > _history.Count - 1) {
 			return null;
 		}
-		if (history.Count == 0) {
+
+		if (_history.Count == 0) {
 			return null;
 		}
-		historyOrd++;
+
+		_historyOrd++;
 
 		// if you keep down-arrowing, put a ceiling on the ordinal, but don't keep returning the last item. return nothing
-		if (historyOrd > history.Count - 1) {
-			historyOrd = history.Count - 1;
+		if (_historyOrd > _history.Count - 1) {
+			_historyOrd = _history.Count - 1;
 			return null;
 		}
 
-		return history[historyOrd];
+		return _history[_historyOrd];
 	}
 
 	public static void ResetOrdinal () {
-		historyOrd = history.Count;
+		_historyOrd = _history.Count;
 	}
 
-	private static readonly IList<string> history = new List<string> ();
-	private static int historyOrd = -1;
+	private static readonly IList<string> _history = new List<string> ();
+	private static int _historyOrd = -1;
 }
