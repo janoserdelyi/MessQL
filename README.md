@@ -17,6 +17,30 @@ So I decided to take a stab at the main features I use from `psql`
 `MessQL` comes from two main things - the code is something i knocked out between jobs and it is a mess.  
 The second thing is that in my head i tend to pronounce "MSSQL" as "MessQL"
 
+## Installing
+
+Requires the .NET 10 SDK to build.
+
+Publish a build to a fixed location (re-run this after pulling code changes):
+
+```sh
+dotnet publish -c Release -o ~/.local/share/messql
+```
+
+Then make it runnable from any terminal. Add an alias to your `~/.zshrc` (or `~/.bashrc`):
+
+```sh
+alias messql="$HOME/.local/share/messql/MessQL"
+```
+
+and run `source ~/.zshrc`, or open a new terminal.
+
+Alternatively, symlink the executable into a directory that is already on your `PATH`. Unlike an alias, this also works from scripts:
+
+```sh
+ln -s ~/.local/share/messql/MessQL ~/.local/bin/messql
+```
+
 ## CLI Options
 
 The `MessQL` binary accepts a few options - arguably the most important being help (`-h`, `--help`, `-?`);
