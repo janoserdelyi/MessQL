@@ -199,6 +199,8 @@ public class Program
 		_ = builder.Clear ();
 		executingQuery = null;
 		char? lastNonWhiteSpaceCharacter = null;
+		// index into the builder where the next typed character goes
+		int cursor = 0;
 
 		try {
 			while (true) {
@@ -210,33 +212,32 @@ public class Program
 
 				var input = Console.ReadKey (intercept: true);
 
-				if (!char.IsWhiteSpace (input.KeyChar)) {
-					lastNonWhiteSpaceCharacter = input.KeyChar;
-				}
-
 				var currentInput = builder.ToString ();
 
 				if (input.Key == ConsoleKey.Backspace) {
-					// reduce the current stringbuilder length by one
-					if (builder.Length > 0) {
-						builder.Length--;
+					// remove the character before the cursor
+					if (cursor > 0) {
+						string before = builder.ToString ();
+						builder.Remove (cursor - 1, 1);
+						cursor--;
 
-						Console.Write ("\b \b");
-
-						// if the cursor position is less than the prompt length and the builder still has length,
-						// we need to move the cursor position up
-						if (Console.CursorLeft < prompt.Length) {
-							var bufw = Console.BufferWidth;
-							var bufh = Console.BufferHeight;
-
-							// delete the current line
-							//char[] blankline = new char[80];
-							//Console.Write (blankline, 0, prompt.Length);
-
-							string[] bufparts = builder.ToString ().Split (new char[] { '\n', '\r' });
-							Console.CursorLeft = prompt.Length + bufparts[bufparts.Length - 1].Length;
-							Console.CursorTop--;
+						if (cursor == builder.Length && !isLineBreak (before[cursor])) {
+							// deleting the last character on a line. no need to redraw
+							Console.Write ("\b \b");
+						} else {
+							redrawInput (before, cursor + 1, builder.ToString (), cursor, prompt);
 						}
+					}
+
+					continue;
+				}
+
+				if (input.Key == ConsoleKey.Delete) {
+					// remove the character under the cursor
+					if (cursor < builder.Length) {
+						string before = builder.ToString ();
+						builder.Remove (cursor, 1);
+						redrawInput (before, cursor, builder.ToString (), cursor, prompt);
 					}
 
 					continue;
@@ -255,7 +256,17 @@ public class Program
 						continue;
 					}
 
+					// enter always acts on the whole entry, wherever the cursor happens to be
+					if (cursor < builder.Length) {
+						moveCursor (builder.ToString (), cursor, builder.Length, prompt);
+						cursor = builder.Length;
+					}
+
 					_ = builder.Append (input.KeyChar);
+
+					// the entry is only complete if it ends in a semi-colon. look at the actual buffer,
+					// since it may have been recalled from history and edited
+					lastNonWhiteSpaceCharacter = builder.ToString ().TrimEnd ().LastOrDefault ();
 
 					// check if the first character in the buffer is a \
 					// if so it's a special command
@@ -513,6 +524,7 @@ where
 
 					Console.WriteLine ();
 					Console.Write (prompt);
+					cursor = builder.Length;
 					continue;
 				}
 
@@ -527,26 +539,7 @@ where
 					string? previousCommand = History.GetPrevious ();
 
 					if (!string.IsNullOrEmpty (previousCommand)) {
-						_ = builder.Clear ();
-						_ = builder.Append (previousCommand);
-						// set the last non-whitespace character
-						lastNonWhiteSpaceCharacter = previousCommand.Last ();
-
-						do { Console.Write ("\b \b"); } while (Console.CursorLeft > 0);
-						Console.Write (prompt);
-
-						// i need to handle multi-line commands
-						string[] cmdparts = builder.ToString ().Split (new char[] { '\n', '\r' });
-
-						Console.CursorLeft = 0;
-						for (int i = 0; i < cmdparts.Length; i++) {
-							Console.Write (prompt);
-							//Console.CursorLeft = prompt.Length;
-							Console.Write (cmdparts[i]);
-							if (i < cmdparts.Length - 1) {
-								Console.Write (Environment.NewLine);
-							}
-						}
+						replaceInput (builder, ref cursor, prompt, previousCommand);
 					}
 
 					continue;
@@ -555,51 +548,71 @@ where
 				if (input.Key == ConsoleKey.DownArrow) {
 					string? nextCommand = History.GetNext ();
 
-					if (!string.IsNullOrEmpty (nextCommand)) {
-						_ = builder.Clear ();
-						_ = builder.Append (nextCommand);
-						// set the last non-whitespace character
-						lastNonWhiteSpaceCharacter = nextCommand.TrimEnd ().Last ();
-
-						// clear anything that's there?
-						do { Console.Write ("\b \b"); } while (Console.CursorLeft > 0);
-						Console.Write (prompt);
-
-						// i need to handle multi-line commands
-						string[] cmdparts = builder.ToString ().Split (new char[] { '\n', '\r' });
-
-						Console.CursorLeft = 0;
-						for (int i = 0; i < cmdparts.Length; i++) {
-							Console.Write (prompt);
-							//Console.CursorLeft = prompt.Length;
-							Console.Write (cmdparts[i]);
-							if (i < cmdparts.Length - 1) {
-								Console.Write (Environment.NewLine);
-							}
-						}
+					// null means there is nothing to do (not browsing history, or nothing newer)
+					if (nextCommand != null) {
+						// an empty string means we've arrowed down past the newest entry: back to a blank prompt
+						replaceInput (builder, ref cursor, prompt, nextCommand);
 					}
 
 					continue;
 				}
 
 				if (input.Key == ConsoleKey.LeftArrow) {
-					// this can get prety hairy. i need to track the position in the builder too
-					// and with multi-line it gets even more wonky
+					if (cursor > 0) {
+						moveCursor (builder.ToString (), cursor, cursor - 1, prompt);
+						cursor--;
+					}
 
-					//if (Console.CursorLeft <= prompt.Length) {
-					//	continue;
-					//}
-					//Console.CursorLeft--;
 					continue;
 				}
 
 				if (input.Key == ConsoleKey.RightArrow) {
-					//input = Console.ReadKey (intercept: true);
+					if (cursor < builder.Length) {
+						moveCursor (builder.ToString (), cursor, cursor + 1, prompt);
+						cursor++;
+					}
+
 					continue;
 				}
 
-				_ = builder.Append (input.KeyChar);
-				Console.Write (input.KeyChar);
+				if (input.Key == ConsoleKey.Home) {
+					// start of the current line
+					int home = lineStart (builder.ToString (), cursor);
+					moveCursor (builder.ToString (), cursor, home, prompt);
+					cursor = home;
+					continue;
+				}
+
+				if (input.Key == ConsoleKey.End) {
+					// end of the current line
+					string text = builder.ToString ();
+					int end = cursor;
+					while (end < text.Length && !isLineBreak (text[end])) {
+						end++;
+					}
+
+					moveCursor (text, cursor, end, prompt);
+					cursor = end;
+					continue;
+				}
+
+				// ignore other non-printing keys (function keys, etc.)
+				if (char.IsControl (input.KeyChar) && input.Key != ConsoleKey.Tab) {
+					continue;
+				}
+
+				if (cursor == builder.Length) {
+					_ = builder.Append (input.KeyChar);
+					Console.Write (input.KeyChar);
+					cursor++;
+				} else {
+					// inserting in the middle of the entry
+					string before = builder.ToString ();
+					_ = builder.Insert (cursor, input.KeyChar);
+					cursor++;
+					redrawInput (before, cursor - 1, builder.ToString (), cursor, prompt);
+				}
+
 
 			}
 		} catch (Exception oops) {
@@ -609,6 +622,113 @@ where
 		// finally? some cleanup/disposal/console reset?
 
 		return commandParseResult;
+	}
+
+	private static bool isLineBreak (
+		char c
+	) => c == '\n' || c == '\r';
+
+	// number of line breaks before the index. ie the zero-based row of that index within the entry
+	private static int lineIndex (
+		string text,
+		int index
+	) {
+		int count = 0;
+		for (int i = 0; i < index && i < text.Length; i++) {
+			if (isLineBreak (text[i])) {
+				count++;
+			}
+		}
+
+		return count;
+	}
+
+	// index of the first character of the line containing the index
+	private static int lineStart (
+		string text,
+		int index
+	) {
+		int i = index;
+		while (i > 0 && !isLineBreak (text[i - 1])) {
+			i--;
+		}
+
+		return i;
+	}
+
+	// place the cursor on screen at the index. top is the screen row of the entry's first line
+	private static void setCursor (
+		string text,
+		int index,
+		int top,
+		string prompt
+	) {
+		int row = lineIndex (text, index);
+		int col = prompt.Length + index - lineStart (text, index);
+		Console.SetCursorPosition (Math.Min (col, Console.BufferWidth - 1), top + row);
+	}
+
+	// move the on-screen cursor from one index of the entry to another
+	private static void moveCursor (
+		string text,
+		int from,
+		int to,
+		string prompt
+	) {
+		int top = Console.CursorTop - lineIndex (text, from);
+		setCursor (text, to, top, prompt);
+	}
+
+	/// <summary>
+	/// erase the displayed entry (including continuation lines), show the new text, and leave the cursor at newCursor
+	/// </summary>
+	private static void redrawInput (
+		string oldText,
+		int oldCursor,
+		string newText,
+		int newCursor,
+		string prompt
+	) {
+		int oldLines = lineIndex (oldText, oldText.Length) + 1;
+		int top = Math.Max (0, Console.CursorTop - lineIndex (oldText, oldCursor));
+
+		string blank = new string (' ', Math.Max (0, Console.BufferWidth - 1));
+		for (int i = 0; i < oldLines; i++) {
+			Console.SetCursorPosition (0, top + i);
+			Console.Write (blank);
+		}
+
+		Console.SetCursorPosition (0, top);
+
+		// multi-line commands: every line gets its own prompt
+		string[] parts = newText.Split (new char[] { '\n', '\r' });
+		for (int i = 0; i < parts.Length; i++) {
+			Console.Write (prompt);
+			Console.Write (parts[i]);
+			if (i < parts.Length - 1) {
+				Console.Write (Environment.NewLine);
+			}
+		}
+
+		// writing new lines at the bottom of the window scrolls it, so work out the top again
+		int newTop = Console.CursorTop - (parts.Length - 1);
+		setCursor (newText, newCursor, newTop, prompt);
+	}
+
+	/// <summary>
+	/// replace the current entry (eg. with a history item). the cursor goes to the end
+	/// </summary>
+	private static void replaceInput (
+		System.Text.StringBuilder builder,
+		ref int cursor,
+		string prompt,
+		string replacement
+	) {
+		string oldText = builder.ToString ();
+		_ = builder.Clear ();
+		_ = builder.Append (replacement);
+		redrawInput (oldText, cursor, replacement, replacement.Length, prompt);
+		cursor = replacement.Length;
 	}
 
 	private static string displayResults (
