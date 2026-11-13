@@ -612,8 +612,6 @@ where
 					cursor++;
 					redrawInput (before, cursor - 1, builder.ToString (), cursor, prompt);
 				}
-
-
 			}
 		} catch (Exception oops) {
 			Console.WriteLine (oops.Message);
@@ -626,7 +624,9 @@ where
 
 	private static bool isLineBreak (
 		char c
-	) => c == '\n' || c == '\r';
+	) {
+		return c == '\n' || c == '\r';
+	}
 
 	// number of line breaks before the index. ie the zero-based row of that index within the entry
 	private static int lineIndex (
