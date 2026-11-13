@@ -5,26 +5,23 @@ public static class History
 	public static void Add (
 		string cmd
 	) {
-		if (string.IsNullOrEmpty (cmd)) {
-			return;
-		}
-
-		if (_history.Contains (cmd)) { // no dupes
+		if (string.IsNullOrWhiteSpace (cmd)) {
 			return;
 		}
 
 		cmd = cmd.TrimEnd ();
 
-		_history.Add (cmd);
+		// no dupes
+		if (!_history.Contains (cmd)) {
+			_history.Add (cmd);
+		}
+
+		// a new command was entered; start browsing from the bottom again
 		_historyOrd = _history.Count;
 	}
 
 	public static string? GetPrevious () {
-		if (_historyOrd <= 0) {
-			return null;
-		}
-
-		if (_history.Count == 0) {
+		if (_historyOrd <= 0 || _history.Count == 0) {
 			return null;
 		}
 
@@ -32,21 +29,21 @@ public static class History
 		return _history[_historyOrd];
 	}
 
+	/// <summary>
+	/// returns the next (newer) history entry.
+	/// returns <see cref="string.Empty"/> when moving past the newest entry, meaning the input should go back to blank.
+	/// returns null when there's nowhere to go (already at the blank prompt)
+	/// </summary>
 	public static string? GetNext () {
-		if (_history.Count > 0 && _historyOrd > _history.Count - 1) {
-			return null;
-		}
-
-		if (_history.Count == 0) {
+		if (_historyOrd >= _history.Count) {
 			return null;
 		}
 
 		_historyOrd++;
 
-		// if you keep down-arrowing, put a ceiling on the ordinal, but don't keep returning the last item. return nothing
-		if (_historyOrd > _history.Count - 1) {
-			_historyOrd = _history.Count - 1;
-			return null;
+		if (_historyOrd >= _history.Count) {
+			_historyOrd = _history.Count;
+			return string.Empty;
 		}
 
 		return _history[_historyOrd];
@@ -57,5 +54,5 @@ public static class History
 	}
 
 	private static readonly IList<string> _history = new List<string> ();
-	private static int _historyOrd = -1;
+	private static int _historyOrd = 0;
 }
