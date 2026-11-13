@@ -4,6 +4,11 @@
 		<TargetFramework>net10.0</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
+		<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+		<AnalysisMode>Recommended</AnalysisMode>
+		<RunAnalyzersDuringBuild>true</RunAnalyzersDuringBuild>
+		<NoWarn>$(NoWarn);EnableGenerateDocumentationFile;CA1848;CA1873</NoWarn>
 	</PropertyGroup>
 	<ItemGroup>
 		<PackageReference Include="System.CommandLine" Version="3.0.0"/>

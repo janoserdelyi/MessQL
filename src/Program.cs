@@ -168,7 +168,7 @@ public class Program
 
 		// test the connection. output some version info
 		string? versionstring = new Connect (new Connection (new SqlConnection (connectionString), new ConnectionPropertyBag () { DatabaseType = DatabaseType.MSSQL, Name = "mssql" })).Query ("select @@version as version;").Go<string?> ((cmd) => {
-			using (IDataReader dr = cmd.ExecuteReader ()) {
+			using (var dr = cmd.ExecuteReader ()) {
 				if (dr.Read ()) {
 					return cmd.DRH!.GetString ("version");
 				}
@@ -337,13 +337,13 @@ public class Program
 									break;
 								}
 
-								if (param.EndsWith (";")) {
+								if (param.EndsWith (';')) {
 									param = param.TrimEnd (';');
 								}
 
 								tableDefinition = true;
 
-								if (param.IndexOf ('.') == -1) {
+								if (!param.Contains ('.')) {
 									param = "dbo." + param;
 								}
 
@@ -352,7 +352,7 @@ public class Program
 
 								string columndefs = "ORDINAL_POSITION as [Ord], COLUMN_NAME as [Column], DATA_TYPE as [Type], CHARACTER_MAXIMUM_LENGTH as [Maxlen], IS_NULLABLE as [Nullable], COLUMN_DEFAULT as [Default]";
 
-								if (cmd.EndsWith ("+")) {
+								if (cmd.EndsWith ('+')) {
 									columndefs += ", CHARACTER_SET_NAME as [Charset], COLLATION_NAME as [Collation]";
 								}
 
@@ -679,6 +679,8 @@ where
 		setCursor (text, to, top, prompt);
 	}
 
+	private static readonly char[] _separator = new char[] { '\n', '\r' };
+
 	/// <summary>
 	/// erase the displayed entry (including continuation lines), show the new text, and leave the cursor at newCursor
 	/// </summary>
@@ -701,7 +703,7 @@ where
 		Console.SetCursorPosition (0, top);
 
 		// multi-line commands: every line gets its own prompt
-		string[] parts = newText.Split (new char[] { '\n', '\r' });
+		string[] parts = newText.Split (_separator);
 		for (int i = 0; i < parts.Length; i++) {
 			Console.Write (prompt);
 			Console.Write (parts[i]);
@@ -781,7 +783,7 @@ where
 		}
 
 		_ = sb.AppendLine ();
-		_ = sb.AppendLine ($"rows ({rowcount})");
+		_ = sb.AppendLine (System.Globalization.CultureInfo.InvariantCulture, $"rows ({rowcount})");
 
 		return sb.ToString ();
 	}
@@ -841,7 +843,7 @@ where
 
 		var sb = new StringBuilder ();
 
-		_ = sb.AppendLine ($"Table \"{tableName}\"");
+		_ = sb.AppendLine (System.Globalization.CultureInfo.InvariantCulture, $"Table \"{tableName}\"");
 
 		string[] names = columnDefs.Columns.ToList<ColumnConfig> ().Select ((el) => { return SafeTruncAndPad (el.Name, el.Width); }).ToArray<string> ();
 
@@ -868,7 +870,7 @@ where
 			_ = sb.AppendLine ("    No indexes");
 		} else {
 			foreach (System.Data.DataRow row in dataset.Tables[1].Rows) {
-				_ = sb.AppendLine ($"    \"{row.ItemArray[0]}\" {row.ItemArray[1]} {(row.ItemArray[3]!.ToString () == "True" ? "PRIMARY KEY" : (row.ItemArray[2]!.ToString () == "True" ? "UNIQUE" : ""))}");
+				_ = sb.AppendLine (System.Globalization.CultureInfo.InvariantCulture, $"    \"{row.ItemArray[0]}\" {row.ItemArray[1]} {(row.ItemArray[3]!.ToString () == "True" ? "PRIMARY KEY" : (row.ItemArray[2]!.ToString () == "True" ? "UNIQUE" : ""))}");
 			}
 		}
 
@@ -878,7 +880,7 @@ where
 			_ = sb.AppendLine ("    No foreign keys");
 		} else {
 			foreach (System.Data.DataRow row in dataset.Tables[2].Rows) {
-				_ = sb.AppendLine ($"    TABLE \"{row.ItemArray[5]}.{row.ItemArray[6]}\" CONSTRAINT \"{row.ItemArray[1]}\" FOREIGN KEY ({row.ItemArray[7]}) REFERENCES {row.ItemArray[2]}.{row.ItemArray[3]}({row.ItemArray[4]})");
+				_ = sb.AppendLine (System.Globalization.CultureInfo.InvariantCulture, $"    TABLE \"{row.ItemArray[5]}.{row.ItemArray[6]}\" CONSTRAINT \"{row.ItemArray[1]}\" FOREIGN KEY ({row.ItemArray[7]}) REFERENCES {row.ItemArray[2]}.{row.ItemArray[3]}({row.ItemArray[4]})");
 			}
 		}
 
@@ -902,16 +904,16 @@ where
 			return val.PadRight (width);
 		}
 
-		return val.Substring (0, width - 1) + "\u2026";
+		return string.Concat (val.AsSpan (0, width - 1), "\u2026");
 	}
 
 	private static (string cmd, string? param) parseMacro (
 		string input
 	) {
 
-		string[] parts = input.Split (new char[0], StringSplitOptions.RemoveEmptyEntries);
+		string[] parts = input.Split (Array.Empty<char> (), StringSplitOptions.RemoveEmptyEntries);
 
-		return (parts[0].ToLower (), parts.Length > 1 ? parts[1] : null);
+		return (parts[0].ToLower (System.Globalization.CultureInfo.InvariantCulture), parts.Length > 1 ? parts[1] : null);
 	}
 
 	// builds an " and col = 'x'" / " and col like 'x%'" fragment. '*' is the wildcard. null/empty/'*' means no filter
@@ -960,7 +962,7 @@ Connection
 ";
 	}
 
-	private static IList<Config>? parseConfig () {
+	private static List<Config>? parseConfig () {
 		// in the spirit of .pgpass - formatted as :
 		// host:port:database:user:password
 
@@ -977,7 +979,7 @@ Connection
 			return null;
 		}
 
-		IList<Config> configs = new List<Config> ();
+		var configs = new List<Config> ();
 
 		foreach (string line in configlines) {
 
