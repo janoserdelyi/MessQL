@@ -53,6 +53,6 @@ public static class History
 		_historyOrd = _history.Count;
 	}
 
-	private static readonly IList<string> _history = new List<string> ();
-	private static int _historyOrd = 0;
+	private static readonly List<string> _history = [];
+	private static int _historyOrd;
 }
