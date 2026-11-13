@@ -24,6 +24,7 @@ Requires the .NET 10 SDK to build.
 Publish a build to a fixed location (re-run this after pulling code changes):
 
 ```sh
+cd src/
 dotnet publish -c Release -o ~/.local/share/messql
 ```
 
