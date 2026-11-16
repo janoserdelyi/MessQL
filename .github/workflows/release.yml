@@ -1,0 +1,317 @@
+# =============================================================================
+# Release — Semantic Versioning & GitHub Release
+# =============================================================================
+# Workflow that:
+#   1. Scans commits since the last semver tag
+#   2. Determines version bump using Conventional Commits (feat/fix/BREAKING CHANGE)
+#   3. Creates and pushes an annotated git tag (e.g. v1.2.3)
+#   4. Creates a GitHub Release with auto-generated release notes
+#
+# Trigger:  workflow_dispatch (manual) or workflow_call (from another workflow)
+# Scope:    release publish runs on master only; dry_run can run from any ref
+# Requires: PR titles follow Conventional Commits; squash-merge is recommended so
+#    the PR title becomes the commit subject
+#    (pr-title-validation.yml enforces PR title format, not merge strategy)
+#
+# Commit message convention:
+#   feat!: ... or BREAKING CHANGE in body  → major bump (1.x.x → 2.0.0)
+#   feat: ... or feat(scope): ...          → minor bump (1.2.x → 1.3.0)
+#   fix: ... or any other type             → patch bump (1.2.3 → 1.2.4)
+#
+# This workflow is reusable and can be called as a post-deployment step if needed.
+# =============================================================================
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump level (overrides auto-detection from commits)"
+        required: false
+        type: choice
+        default: auto
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: "Preview version without tagging or releasing"
+        required: false
+        type: boolean
+        default: false
+      tag_message:
+        description: "Custom annotated tag message (leave blank to auto-generate from commits)"
+        required: false
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      bump:
+        description: "Version bump level (overrides auto-detection from commits)"
+        required: false
+        type: string
+        default: auto
+      dry_run:
+        description: "Preview version without tagging or releasing"
+        required: false
+        type: boolean
+        default: false
+      tag_message:
+        description: "Custom annotated tag message (leave blank to auto-generate from commits)"
+        required: false
+        type: string
+        default: ""
+    outputs:
+      version:
+        description: "Semantic version (e.g. 1.2.3)"
+        value: ${{ jobs.release.outputs.version }}
+      tag:
+        description: "Git tag (e.g. v1.2.3)"
+        value: ${{ jobs.release.outputs.tag }}
+
+permissions:
+  contents: write # Required to push git tags and create releases
+
+jobs:
+  release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || inputs.dry_run == true
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0 # Full history required for tag detection and commit scanning
+
+      - name: Determine semantic version
+        id: version
+        env:
+          MANUAL_BUMP: ${{ inputs.bump }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          # ----------------------------------------------------------------
+          # 1. Find the latest semver tag (default to v0.0.0 if none exists)
+          # ----------------------------------------------------------------
+          LATEST_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || echo "")
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No existing version tag found — starting from v0.0.0"
+            CURRENT="0.0.0"
+            COMMIT_RANGE="HEAD"
+          else
+            echo "Latest tag: $LATEST_TAG"
+            CURRENT="${LATEST_TAG#v}"
+            COMMIT_RANGE="${LATEST_TAG}..HEAD"
+          fi
+
+          MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+          MINOR=$(echo "$CURRENT" | cut -d. -f2)
+          PATCH=$(echo "$CURRENT" | cut -d. -f3)
+
+          # ----------------------------------------------------------------
+          # 2. Scan all commits since the last tag
+          # ----------------------------------------------------------------
+          echo ""
+          echo "Scanning commits in range: $COMMIT_RANGE"
+          echo "─────────────────────────────────────────────────────────"
+
+          COMMITS=$(git log --pretty=format:"%s%n%b" "$COMMIT_RANGE")
+
+
+          if [ -z "$COMMITS" ]; then
+            echo "No commits since last tag ($LATEST_TAG). Nothing to release."
+            echo "version=" >> $GITHUB_OUTPUT
+            echo "tag=" >> $GITHUB_OUTPUT
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "$COMMITS"
+          echo "─────────────────────────────────────────────────────────"
+          echo ""
+
+          # ----------------------------------------------------------------
+          # 3. Determine the highest bump level from commit messages
+          #    Priority: major > minor > patch
+          #    Skipped when bump input is set to patch/minor/major explicitly
+          # ----------------------------------------------------------------
+          if [ -z "$MANUAL_BUMP" ]; then
+            MANUAL_BUMP="auto"
+          fi
+
+          case "$MANUAL_BUMP" in
+            auto|major|minor|patch) ;;
+            *)
+              echo "Invalid bump input: '$MANUAL_BUMP' (expected: auto, patch, minor, major)" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ "$MANUAL_BUMP" != "auto" ]; then
+            BUMP="$MANUAL_BUMP"
+            echo "Bump type overridden by input: $BUMP"
+          else
+            BUMP="patch"
+
+            while IFS= read -r MSG; do
+              # Check for breaking changes: type!: or BREAKING CHANGE in message
+              if echo "$MSG" | grep -qiE '^[a-z]+(\(.+\))?!:' || echo "$MSG" | grep -qi 'BREAKING CHANGE'; then
+                BUMP="major"
+                break  # Major is the highest — no need to continue
+              fi
+
+              # Check for features: feat: or feat(scope):
+              if echo "$MSG" | grep -qiE '^feat(\(.+\))?:'; then
+                BUMP="minor"
+                # Don't break — a later commit might be a breaking change
+              fi
+            done <<< "$COMMITS"
+
+            echo "Bump type determined from commits: $BUMP"
+          fi
+
+          case "$BUMP" in
+            major|minor|patch) ;;
+            *)
+              echo "Internal error: invalid bump type computed: '$BUMP'" >&2
+              exit 1
+              ;;
+          esac
+
+          # ----------------------------------------------------------------
+          # 4. Calculate the new version
+          # ----------------------------------------------------------------
+          case "$BUMP" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          SEMVER="${MAJOR}.${MINOR}.${PATCH}"
+          GIT_TAG="v${SEMVER}"
+
+          echo ""
+          echo "═══════════════════════════════════════════════════════════"
+          echo "  Version bump:  $BUMP"
+          echo "  Previous:      v${CURRENT}"
+          echo "  New version:   ${GIT_TAG}"
+          echo "  Dry run:       $DRY_RUN"
+          echo "═══════════════════════════════════════════════════════════"
+
+          echo "version=${SEMVER}" >> $GITHUB_OUTPUT
+          echo "tag=${GIT_TAG}" >> $GITHUB_OUTPUT
+          echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+          echo "bump=${BUMP}" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+      - name: Create and push git tag
+        if: steps.version.outputs.skip != 'true' && inputs.dry_run != true
+        env:
+          INPUT_MESSAGE: ${{ inputs.tag_message }}
+        run: |
+          git fetch --tags
+          GIT_TAG="${{ steps.version.outputs.tag }}"
+
+          # Idempotent — skip if tag already exists
+          if git rev-parse "$GIT_TAG" >/dev/null 2>&1; then
+            echo "⚠️  Tag $GIT_TAG already exists — skipping tag creation"
+            exit 0
+          fi
+
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          if [ -n "$INPUT_MESSAGE" ]; then
+            TAG_MESSAGE="$INPUT_MESSAGE"
+          else
+            LATEST_TAG="${{ steps.version.outputs.latest_tag }}"
+            BUMP="${{ steps.version.outputs.bump }}"
+
+            if [ -z "$LATEST_TAG" ]; then
+              COMMIT_RANGE="HEAD"
+              PREV_DISPLAY="(initial release)"
+            else
+              COMMIT_RANGE="${LATEST_TAG}..HEAD"
+              PREV_DISPLAY="$LATEST_TAG"
+            fi
+
+            COMMIT_SUBJECTS=$(git log --pretty=format:"- %s" "$COMMIT_RANGE")
+
+            TAG_MESSAGE=$(printf '%s\n\n%s\n\n%s\n%s' \
+              "Release ${GIT_TAG}" \
+              "Bump: ${BUMP} (${PREV_DISPLAY} → ${GIT_TAG})" \
+              "Changes:" \
+              "${COMMIT_SUBJECTS}")
+          fi
+
+          git tag -a "$GIT_TAG" -m "$TAG_MESSAGE"
+          git push origin "$GIT_TAG"
+
+          echo "✅ Created and pushed tag: $GIT_TAG"
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.skip != 'true' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          GIT_TAG="${{ steps.version.outputs.tag }}"
+
+          # Idempotent — skip if release already exists
+          if gh release view "$GIT_TAG" >/dev/null 2>&1; then
+            echo "⚠️  Release $GIT_TAG already exists — skipping"
+            exit 0
+          fi
+
+          gh release create "$GIT_TAG" \
+            --title "Release $GIT_TAG" \
+            --generate-notes \
+            --latest
+
+          echo "✅ GitHub Release created: $GIT_TAG"
+          echo "   URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$GIT_TAG"
+
+      - name: Summary
+        if: steps.version.outputs.skip != 'true'
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "### 🏷️ Dry Run — Release Preview" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Version | \`${{ steps.version.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Tag | \`${{ steps.version.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Mode | **Dry run** — no tag or release created |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 🚀 Release Published" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Version | \`${{ steps.version.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Tag | \`${{ steps.version.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Release | [${{ steps.version.outputs.tag }}](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}) |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Nothing to release
+        if: steps.version.outputs.skip == 'true'
+        run: |
+          echo "### ℹ️ Nothing to Release" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No commits found since the last tag. Nothing to release." >> $GITHUB_STEP_SUMMARY
