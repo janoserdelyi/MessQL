@@ -414,6 +414,35 @@ where
 								}
 
 								break;
+							case @"\dv":
+							case @"\dvs":
+								// list views. \dvS includes system views. like psql, a pattern also includes system views
+								{
+									string? dvSchema = null;
+									string? dvName = null;
+									string dvParam = (param ?? string.Empty).TrimEnd (';');
+
+									if (dvParam.Contains ('.')) {
+										string[] dvparts = dvParam.Split ('.', 2);
+										dvSchema = dvparts[0];
+										dvName = dvparts[1];
+									} else if (dvParam != string.Empty) {
+										// a bare pattern is a schema, consistent with \dt
+										dvSchema = dvParam;
+									}
+
+									string dvWhere = "1 = 1";
+									if (cmd == @"\dv" && string.IsNullOrEmpty (dvSchema) && string.IsNullOrEmpty (dvName)) {
+										dvWhere += " and v.is_ms_shipped = 0";
+									}
+
+									dvWhere += likeClause ("s.name", dvSchema);
+									dvWhere += likeClause ("v.name", dvName);
+
+									executingQuery = $"select s.name as [schema_name], v.name as [view_name], case when v.is_ms_shipped = 1 then 'system view' else 'view' end as [type] from sys.all_views v join sys.schemas s on s.schema_id = v.schema_id where {dvWhere} order by s.name, v.name;";
+								}
+
+								break;
 							case @"\df":
 							case @"\dfs":
 								// list functions and stored procedures. \dfS includes system objects
@@ -453,6 +482,18 @@ where
 								sourceName = param.TrimEnd (';');
 								showSource = true;
 								executingQuery = $"select m.definition from sys.sql_modules m where m.[object_id] = OBJECT_ID('{sourceName.Replace ("'", "''")}');";
+								break;
+							case @"\ev":
+								// show the definition of a view. system views (e.g. INFORMATION_SCHEMA.TABLES) work too
+								if (string.IsNullOrEmpty (param)) {
+									Console.WriteLine ();
+									Console.WriteLine ("\\ev requires a view name");
+									break;
+								}
+
+								sourceName = param.TrimEnd (';');
+								showSource = true;
+								executingQuery = $"select m.definition from sys.all_sql_modules m join sys.all_objects o on o.[object_id] = m.[object_id] where o.type = 'V' and m.[object_id] = OBJECT_ID('{sourceName.Replace ("'", "''")}');";
 								break;
 							case @"\conninfo":
 								// You are connected to database "nestiny" as user "nestinyadmin" on host "localhost" (address "::1") at port "54320".
@@ -954,8 +995,10 @@ Informational
   	\d[S+]  NAME            describe table, view, sequence, or index
 	\dt                     describe tables
 	\dn     [PATTERN]       list schemas
+	\dv[S]  [PATTERN]       list views (PATTERN: schema, or schema.name, * wildcard; a pattern includes system views)
 	\df[S]  [PATTERN]       list functions and stored procedures (PATTERN: name or schema.name, * wildcard)
 	\sf     NAME            show the source of a function or stored procedure
+	\ev     NAME            show the definition of a view
 
 Connection
   \conninfo display information about current connection
