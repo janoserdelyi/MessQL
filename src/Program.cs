@@ -208,6 +208,8 @@ public class Program
 				bool tableDefinition = false;
 				string tableDefinitionName = string.Empty;
 				bool showSource = false;
+				bool describeMatches = false;
+				bool describeIncludeDetail = false;
 				string sourceName = string.Empty;
 
 				var input = Console.ReadKey (intercept: true);
@@ -347,39 +349,18 @@ public class Program
 									param = "dbo." + param;
 								}
 
-								string[] dparts = param.Split ('.');
+								string[] dparts = param.Split ('.', 2);
 								tableDefinitionName = param;
+								bool describePlus = cmd.EndsWith ('+');
 
-								string columndefs = "ORDINAL_POSITION as [Ord], COLUMN_NAME as [Column], DATA_TYPE as [Type], CHARACTER_MAXIMUM_LENGTH as [Maxlen], IS_NULLABLE as [Nullable], COLUMN_DEFAULT as [Default]";
-
-								if (cmd.EndsWith ('+')) {
-									columndefs += ", CHARACTER_SET_NAME as [Charset], COLLATION_NAME as [Collation]";
+								if (dparts[0].Contains ('*') || dparts[1].Contains ('*')) {
+									// wildcard. find the matching tables and views, then describe each. like psql, system objects are included when a pattern is given
+									describeMatches = true;
+									describeIncludeDetail = describePlus;
+									executingQuery = $"select s.name as [schema_name], o.name as [name], o.type as [type] from sys.all_objects o join sys.schemas s on s.schema_id = o.schema_id where o.type in ('U','V'){likeClause ("s.name", dparts[0])}{likeClause ("o.name", dparts[1])} order by s.name, o.name;";
+								} else {
+									executingQuery = buildTableDefinitionQuery (dparts[0], dparts[1], describePlus);
 								}
-
-								executingQuery = $"select {columndefs} FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{dparts[0]}' and TABLE_NAME = '{dparts[1]}';";
-
-								executingQuery += $"select name, type_desc, is_unique, is_primary_key from sys.indexes where [object_id] = OBJECT_ID('{param}');";
-								// FK's
-								executingQuery += $@"SELECT
-	obj.object_id as [objid],
-	obj.name AS FK_NAME,
-    sch1.name AS [schema_name],
-    tab1.name AS [table],
-    col1.name AS [column],
-	sch2.name AS [referenced_schema_name],
-    tab2.name AS [referenced_table],
-    col2.name AS [referenced_column]
-FROM
-	sys.foreign_key_columns fkc
-	INNER JOIN sys.objects obj ON obj.object_id = fkc.constraint_object_id
-	INNER JOIN sys.tables tab1 ON tab1.object_id = fkc.parent_object_id
-	INNER JOIN sys.schemas sch1 ON tab1.schema_id = sch1.schema_id
-	INNER JOIN sys.columns col1 ON col1.column_id = parent_column_id AND col1.object_id = tab1.object_id
-	INNER JOIN sys.tables tab2 ON tab2.object_id = fkc.referenced_object_id
-	INNER JOIN sys.schemas sch2 ON tab2.schema_id = sch2.schema_id
-	INNER JOIN sys.columns col2 ON col2.column_id = referenced_column_id AND col2.object_id = tab2.object_id
-where
-	fkc.parent_object_id = OBJECT_ID('{param}');";
 
 								/*
 	SELECT CONSTRAINT_NAME
@@ -411,6 +392,35 @@ where
 									} else {
 										executingQuery = $"select * from sys.schemas where name = '{param}';";
 									}
+								}
+
+								break;
+							case @"\dv":
+							case @"\dvs":
+								// list views. \dvS includes system views. like psql, a pattern also includes system views
+								{
+									string? dvSchema = null;
+									string? dvName = null;
+									string dvParam = (param ?? string.Empty).TrimEnd (';');
+
+									if (dvParam.Contains ('.')) {
+										string[] dvparts = dvParam.Split ('.', 2);
+										dvSchema = dvparts[0];
+										dvName = dvparts[1];
+									} else if (dvParam != string.Empty) {
+										// a bare pattern is a schema, consistent with \dt
+										dvSchema = dvParam;
+									}
+
+									string dvWhere = "1 = 1";
+									if (cmd == @"\dv" && string.IsNullOrEmpty (dvSchema) && string.IsNullOrEmpty (dvName)) {
+										dvWhere += " and v.is_ms_shipped = 0";
+									}
+
+									dvWhere += likeClause ("s.name", dvSchema);
+									dvWhere += likeClause ("v.name", dvName);
+
+									executingQuery = $"select s.name as [schema_name], v.name as [view_name], case when v.is_ms_shipped = 1 then 'system view' else 'view' end as [type] from sys.all_views v join sys.schemas s on s.schema_id = v.schema_id where {dvWhere} order by s.name, v.name;";
 								}
 
 								break;
@@ -453,6 +463,18 @@ where
 								sourceName = param.TrimEnd (';');
 								showSource = true;
 								executingQuery = $"select m.definition from sys.sql_modules m where m.[object_id] = OBJECT_ID('{sourceName.Replace ("'", "''")}');";
+								break;
+							case @"\sv":
+								// show the definition of a view. system views (e.g. INFORMATION_SCHEMA.TABLES) work too
+								if (string.IsNullOrEmpty (param)) {
+									Console.WriteLine ();
+									Console.WriteLine ("\\sv requires a view name");
+									break;
+								}
+
+								sourceName = param.TrimEnd (';');
+								showSource = true;
+								executingQuery = $"select m.definition from sys.all_sql_modules m join sys.all_objects o on o.[object_id] = m.[object_id] where o.type = 'V' and m.[object_id] = OBJECT_ID('{sourceName.Replace ("'", "''")}');";
 								break;
 							case @"\conninfo":
 								// You are connected to database "nestiny" as user "nestinyadmin" on host "localhost" (address "::1") at port "54320".
@@ -501,7 +523,28 @@ where
 								goto start;
 							}
 
-							if (showSource == true) {
+							if (describeMatches == true) {
+								if (dataset.Tables[0].Rows.Count == 0) {
+									Console.WriteLine ("Did not find any relations.");
+								} else {
+									foreach (System.Data.DataRow match in dataset.Tables[0].Rows) {
+										string matchSchema = match["schema_name"].ToString () ?? string.Empty;
+										string matchName = match["name"].ToString () ?? string.Empty;
+										string matchKind = match["type"].ToString ()?.Trim () == "V" ? "View" : "Table";
+
+										string matchQuery = buildTableDefinitionQuery (matchSchema, matchName, describeIncludeDetail).Replace ('\n', ' ').Replace ('\r', ' ');
+										using var matchAdapter = new SqlDataAdapter (matchQuery, sqlConnection);
+										using var matchDataset = new DataSet ();
+										_ = matchAdapter.Fill (matchDataset);
+
+										if (matchDataset.Tables.Count < 3) {
+											continue;
+										}
+
+										Console.WriteLine (displayTableDefinition (matchDataset, $"{matchSchema}.{matchName}", matchKind));
+									}
+								}
+							} else if (showSource == true) {
 								object? source = dataset.Tables[0].Rows.Count > 0 ? dataset.Tables[0].Rows[0][0] : null;
 								if (source == null || source == DBNull.Value) {
 									Console.WriteLine ($"no source found for \"{sourceName}\" (does not exist, has no T-SQL source, or is encrypted)");
@@ -835,7 +878,8 @@ where
 	*/
 	private static string displayTableDefinition (
 		DataSet dataset,
-		string tableName
+		string tableName,
+		string kind = "Table"
 	) {
 		int windowwidth = Console.WindowWidth;
 
@@ -843,7 +887,7 @@ where
 
 		var sb = new StringBuilder ();
 
-		_ = sb.AppendLine (System.Globalization.CultureInfo.InvariantCulture, $"Table \"{tableName}\"");
+		_ = sb.AppendLine (System.Globalization.CultureInfo.InvariantCulture, $"{kind} \"{tableName}\"");
 
 		string[] names = columnDefs.Columns.ToList<ColumnConfig> ().Select ((el) => { return SafeTruncAndPad (el.Name, el.Width); }).ToArray<string> ();
 
@@ -916,6 +960,50 @@ where
 		return (parts[0].ToLower (System.Globalization.CultureInfo.InvariantCulture), parts.Length > 1 ? parts[1] : null);
 	}
 
+	// the three queries (columns, indexes, foreign keys) that make up a \d description
+	private static string buildTableDefinitionQuery (
+		string schema,
+		string table,
+		bool detail
+	) {
+		string safeSchema = schema.Replace ("'", "''");
+		string safeTable = table.Replace ("'", "''");
+		string qualified = $"{safeSchema}.{safeTable}";
+
+		string columndefs = "ORDINAL_POSITION as [Ord], COLUMN_NAME as [Column], DATA_TYPE as [Type], CHARACTER_MAXIMUM_LENGTH as [Maxlen], IS_NULLABLE as [Nullable], COLUMN_DEFAULT as [Default]";
+
+		if (detail) {
+			columndefs += ", CHARACTER_SET_NAME as [Charset], COLLATION_NAME as [Collation]";
+		}
+
+		string query = $"select {columndefs} from information_schema.columns where table_schema = '{safeSchema}' and table_name = '{safeTable}';";
+
+		query += $"select name, type_desc, is_unique, is_primary_key from sys.indexes where [object_id] = object_id('{qualified}');";
+		// FK's
+		query += $@"select
+	obj.object_id as [objid],
+	obj.name AS FK_NAME,
+	sch1.name AS [schema_name],
+	tab1.name AS [table],
+	col1.name AS [column],
+	sch2.name AS [referenced_schema_name],
+	tab2.name AS [referenced_table],
+	col2.name AS [referenced_column]
+from
+	sys.foreign_key_columns fkc
+	inner join sys.objects obj ON obj.object_id = fkc.constraint_object_id
+	inner join sys.tables tab1 ON tab1.object_id = fkc.parent_object_id
+	inner join sys.schemas sch1 ON tab1.schema_id = sch1.schema_id
+	inner join sys.columns col1 ON col1.column_id = parent_column_id AND col1.object_id = tab1.object_id
+	inner join sys.tables tab2 ON tab2.object_id = fkc.referenced_object_id
+	inner join sys.schemas sch2 ON tab2.schema_id = sch2.schema_id
+	inner join sys.columns col2 ON col2.column_id = referenced_column_id AND col2.object_id = tab2.object_id
+where
+	fkc.parent_object_id = object_id('{qualified}');";
+
+		return query;
+	}
+
 	// builds an " and col = 'x'" / " and col like 'x%'" fragment. '*' is the wildcard. null/empty/'*' means no filter
 	private static string likeClause (
 		string column,
@@ -951,11 +1039,13 @@ Help
 Informational
 	(options: S = show system objects, + = additional detail)
   	\d[S+]                  list tables, views, and sequences
-  	\d[S+]  NAME            describe table, view, sequence, or index
-	\dt                     describe tables
+  	\d[S+]  NAME            describe table or view (NAME: name or schema.name, * wildcard to describe every match)
+	\dt     [PATTERN]       describe tables
 	\dn     [PATTERN]       list schemas
+	\dv[S]  [PATTERN]       list views (PATTERN: schema, or schema.name, * wildcard; a pattern includes system views)
 	\df[S]  [PATTERN]       list functions and stored procedures (PATTERN: name or schema.name, * wildcard)
 	\sf     NAME            show the source of a function or stored procedure
+	\sv     NAME            show the definition of a view
 
 Connection
   \conninfo display information about current connection
