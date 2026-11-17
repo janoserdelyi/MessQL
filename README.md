@@ -84,13 +84,13 @@ The following have been implemented in some form or fashion:
 - `\q` exit
 - `\?` help
 - `\x` expanded display
-- `\d`, `\d+` basic definitions. handles wildcards to find objects
+- `\d`, `\d+` basic definitions of tables and views. accepts `name` (assumes `dbo`) or `schema.name`; `*` wildcards (e.g. `\d dbo.*`, `\d dbo.cust*`) describe every matching table and view, system ones included
 - `\dt` table definitions. handles wildcards
 - `\dn` schemas
 - `\dv`, `\dvS` list views. accepts `schema` or `schema.name`, handles wildcards. `S` includes system views; giving a pattern (e.g. `\dv information_schema.*`) includes them too, as in psql
 - `\df`, `\dfS` list functions and stored procedures. accepts `name` or `schema.name`, handles wildcards. `S` includes system objects
 - `\sf name` show the source of a function or stored procedure
-- `\ev name` show the definition of a view. accepts `name` or `schema.name`, works for system views like `information_schema.tables`
+- `\sv name` show the definition of a view. accepts `name` or `schema.name`, works for system views like `information_schema.tables`
 - `\conninfo` connection info
 - multi-line queries
 - still working out up/down arrow query history
