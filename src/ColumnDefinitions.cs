@@ -11,17 +11,31 @@ public struct ColumnDefinitions
 
 	public ColumnDefinitions (
 		DataTable table,
-		int windowWidth
+		int windowWidth,
+		string nullDisplay = ""
 	) {
 		WindowWidth = windowWidth;
-		calculateColumnWidths (table);
+		calculateColumnWidths (table, nullDisplay);
+	}
+
+	// the text shown for a value. NULLs (DBNull, which ToString()s to an empty string) show as nullDisplay
+	public static string FormatValue (
+		object? value,
+		string nullDisplay
+	) {
+		if (value == null || value == DBNull.Value) {
+			return nullDisplay;
+		}
+
+		return value.ToString () ?? string.Empty;
 	}
 
 	public IList<ColumnConfig> Columns { get; } = new List<ColumnConfig> ();
 	public int WindowWidth { get; set; }
 
 	private readonly void calculateColumnWidths (
-		DataTable table
+		DataTable table,
+		string nullDisplay
 	) {
 		if (table == null) {
 			return;
@@ -34,7 +48,7 @@ public struct ColumnDefinitions
 
 		foreach (System.Data.DataRow row in table.Rows) {
 			for (int i = 0; i < row.ItemArray.Length; i++) {
-				int len = row.ItemArray[i]?.ToString ()?.Length ?? 0;
+				int len = FormatValue (row.ItemArray[i], nullDisplay).Length;
 				if (len > Columns[i].Width) {
 					Columns[i].Width = len;
 				}

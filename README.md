@@ -74,6 +74,12 @@ host:port:database:user:password
 
 Depending one which values you provide to the `MessQL` binary, it will seek to match values in `.mssqlpass` and will use the first matching line's values.
 
+`MessQL` also reads `~/.messqlrc` on startup, in the spirit of psql's `.psqlrc`: one backslash command per line, blank lines and `--` comments ignored. Currently only `\pset` is supported there. For example, to always display NULL as `∅`:
+
+```
+\pset null '∅'
+```
+
 ## Implemented features
 
 This is where i would really love some PRs too - in addition to code structuring fun.
@@ -84,6 +90,7 @@ The following have been implemented in some form or fashion:
 - `\q` exit
 - `\?` help
 - `\x` expanded display
+- `\pset null [STRING]` how NULL is displayed for the current session (the only `\pset` option so far)
 - `\d`, `\d+` basic definitions of tables and views. accepts `name` (assumes `dbo`) or `schema.name`; `*` wildcards (e.g. `\d dbo.*`, `\d dbo.cust*`) describe every matching table and view, system ones included
 - `\dt` table definitions. handles wildcards
 - `\dn` schemas
