@@ -181,8 +181,8 @@ public class Program
 		Console.WriteLine ();
 
 		// session display settings (\pset). ~/.messqlrc can set them up front
-		var printSettings = new PrintSettings ();
-		RcFile.Load (printSettings);
+		var sessionSettings = new SessionSettings ();
+		RcFile.Load (sessionSettings);
 
 	returnAfterExit:
 
@@ -305,10 +305,17 @@ public class Program
 								break;
 							case @"\pset":
 								// \pset OPTION [VALUE]. values may be quoted, so parse the whole entry rather than using param
-								var psetArgs = PrintSettings.SplitArguments (builder.ToString ().TrimEnd ().TrimEnd (';'));
+								var psetArgs = SessionSettings.SplitArguments (builder.ToString ().TrimEnd ().TrimEnd (';'));
 								psetArgs.RemoveAt (0);
 								Console.WriteLine ();
-								Console.WriteLine (printSettings.Pset (psetArgs).message);
+								Console.WriteLine (sessionSettings.Pset (psetArgs).message);
+								break;
+							case @"\timing":
+								// \timing [on|off]. no argument toggles
+								var timingArgs = SessionSettings.SplitArguments (builder.ToString ().TrimEnd ().TrimEnd (';'));
+								timingArgs.RemoveAt (0);
+								Console.WriteLine ();
+								Console.WriteLine (sessionSettings.SetTiming (timingArgs).message);
 								break;
 							case @"\dt":
 								if (string.IsNullOrEmpty (param) || param == "*") {
@@ -528,10 +535,14 @@ public class Program
 							using var sqlConnection = new SqlConnection (connectionString);
 							using var adapter = new SqlDataAdapter (executingQuery, sqlConnection);
 							using var dataset = new DataSet ();
+							// time the query and fetching the results, not displaying them (like psql)
+							var stopwatch = System.Diagnostics.Stopwatch.StartNew ();
 							_ = adapter.Fill (dataset);
+							stopwatch.Stop ();
 
 							if (dataset.Tables.Count == 0) {
 								Console.WriteLine ("no results found");
+								writeTiming (sessionSettings, stopwatch);
 								Console.Write (prompt);
 								goto start;
 							}
@@ -567,8 +578,10 @@ public class Program
 							} else if (tableDefinition == true) {
 								Console.WriteLine (displayTableDefinition (dataset, tableDefinitionName));
 							} else {
-								Console.WriteLine (displayResults (dataset.Tables[0], printSettings, expandedDisplay));
+								Console.WriteLine (displayResults (dataset.Tables[0], sessionSettings, expandedDisplay));
 							}
+
+							writeTiming (sessionSettings, stopwatch);
 						}
 
 						goto start;
@@ -789,9 +802,19 @@ public class Program
 		cursor = replacement.Length;
 	}
 
+	// \timing : "Time: 33.566 ms"
+	private static void writeTiming (
+		SessionSettings settings,
+		System.Diagnostics.Stopwatch stopwatch
+	) {
+		if (settings.Timing) {
+			Console.WriteLine (string.Create (System.Globalization.CultureInfo.InvariantCulture, $"Time: {stopwatch.Elapsed.TotalMilliseconds:F3} ms"));
+		}
+	}
+
 	private static string displayResults (
 		DataTable table,
-		PrintSettings settings,
+		SessionSettings settings,
 		bool expandedDisplay = false
 	) {
 
@@ -1046,28 +1069,31 @@ where
 
 	private static string writeHelp () {
 		return @"General
-	\q                      quit mssqlcli
+  \q                      quit mssqlcli
 
 Help
-	\?                      show this help
+  \?                      show this help
 
 Informational
-	(options: S = show system objects, + = additional detail)
-	\d[S+]                  list tables, views, and sequences
-	\d[S+]  NAME            describe table or view (NAME: name or schema.name, * wildcard to describe every match)
-	\dt     [PATTERN]       describe tables
-	\dn     [PATTERN]       list schemas
-	\dv[S]  [PATTERN]       list views (PATTERN: schema, or schema.name, * wildcard; a pattern includes system views)
-	\df[S]  [PATTERN]       list functions and stored procedures (PATTERN: name or schema.name, * wildcard)
-	\sf     NAME            show the source of a function or stored procedure
-	\sv     NAME            show the definition of a view
+  (options: S = show system objects, + = additional detail)
+  \d[S+]                  list tables, views, and sequences
+  \d[S+]  NAME            describe table or view (NAME: name or schema.name, * wildcard to describe every match)
+  \dt     [PATTERN]       describe tables
+  \dn     [PATTERN]       list schemas
+  \dv[S]  [PATTERN]       list views (PATTERN: schema, or schema.name, * wildcard; a pattern includes system views)
+  \df[S]  [PATTERN]       list functions and stored procedures (PATTERN: name or schema.name, * wildcard)
+  \sf     NAME            show the source of a function or stored procedure
+  \sv     NAME            show the definition of a view
 
 Formatting
-	\pset null [STRING]     set how NULL is displayed (default: empty). also valid in ~/.messqlrc
-	\x                      toggle expanded output
+  \pset null [STRING]     set how NULL is displayed (default: empty). also valid in ~/.messqlrc
+  \x                      toggle expanded output
 
 Connection
   \conninfo display information about current connection
+
+Operating System
+  \timing [on|off]        toggle timing of commands
 ";
 	}
 

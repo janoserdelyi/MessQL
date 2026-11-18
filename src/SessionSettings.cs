@@ -3,12 +3,45 @@ using System.Text;
 namespace mssqlcli;
 
 /// <summary>
-/// session display settings, changed with \pset (and persisted by putting \pset lines in ~/.messqlrc)
+/// session settings, changed with backslash commands (\pset, \timing) and persisted by putting those lines in ~/.messqlrc
 /// </summary>
-public sealed class PrintSettings
+public sealed class SessionSettings
 {
 	// how a NULL value is displayed. psql's default is an empty string
 	public string NullDisplay { get; set; } = string.Empty;
+
+	// \timing : show how long each query took
+	public bool Timing { get; set; }
+
+	/// <summary>
+	/// apply a \timing command. no argument toggles, otherwise on/off (or true/false, yes/no, 1/0 like psql)
+	/// </summary>
+	public (bool success, string message) SetTiming (
+		IReadOnlyList<string> args
+	) {
+		if (args.Count == 0) {
+			Timing = !Timing;
+		} else {
+			switch (args[0].ToLowerInvariant ()) {
+				case "on":
+				case "true":
+				case "yes":
+				case "1":
+					Timing = true;
+					break;
+				case "off":
+				case "false":
+				case "no":
+				case "0":
+					Timing = false;
+					break;
+				default:
+					return (false, $"unrecognized value \"{args[0]}\" for \"\\timing\": Boolean expected");
+			}
+		}
+
+		return (true, $"Timing is {(Timing ? "on" : "off")}.");
+	}
 
 	/// <summary>
 	/// apply a \pset command. args are the tokens following \pset

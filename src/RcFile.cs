@@ -2,14 +2,14 @@ namespace mssqlcli;
 
 /// <summary>
 /// reads ~/.messqlrc, in the spirit of psql's ~/.psqlrc. one command per line.
-/// blank lines and "--" comments are ignored. currently the only supported command is \pset
+/// blank lines and "--" comments are ignored. currently the supported commands are \pset and \timing
 /// </summary>
 public static class RcFile
 {
 	public const string FILE_NAME = ".messqlrc";
 
 	public static void Load (
-		PrintSettings settings
+		SessionSettings settings
 	) {
 		string path = Path.Combine (Environment.GetFolderPath (Environment.SpecialFolder.UserProfile), FILE_NAME);
 
@@ -38,18 +38,25 @@ public static class RcFile
 			}
 
 			// like the interactive commands, tolerate a trailing semi-colon
-			var args = PrintSettings.SplitArguments (line.TrimEnd (';'));
+			var args = SessionSettings.SplitArguments (line.TrimEnd (';'));
 			string cmd = args[0].ToLowerInvariant ();
 			args.RemoveAt (0);
 
-			if (cmd != @"\pset") {
-				Console.WriteLine ($"{path}:{i + 1}: command {cmd} is not supported in {FILE_NAME}. skipping");
-				continue;
+			(bool success, string message) result;
+			switch (cmd) {
+				case @"\pset":
+					result = settings.Pset (args);
+					break;
+				case @"\timing":
+					result = settings.SetTiming (args);
+					break;
+				default:
+					Console.WriteLine ($"{path}:{i + 1}: command {cmd} is not supported in {FILE_NAME}. skipping");
+					continue;
 			}
 
-			var (success, message) = settings.Pset (args);
-			if (!success) {
-				Console.WriteLine ($"{path}:{i + 1}: {message}");
+			if (!result.success) {
+				Console.WriteLine ($"{path}:{i + 1}: {result.message}");
 			}
 		}
 	}
