@@ -184,6 +184,10 @@ public class Program
 		var sessionSettings = new SessionSettings ();
 		RcFile.Load (sessionSettings);
 
+		// history is persisted per HISTFILE/HISTSIZE, which ~/.messqlrc may have set
+		History.Configure (sessionSettings.ResolveHistFile (optionsConfig.Database), sessionSettings.HistSize);
+		History.Load ();
+
 	returnAfterExit:
 
 		string prompt = $"{optionsConfig.Database}=# ";
@@ -316,6 +320,14 @@ public class Program
 								timingArgs.RemoveAt (0);
 								Console.WriteLine ();
 								Console.WriteLine (sessionSettings.SetTiming (timingArgs).message);
+								break;
+							case @"\set":
+								// \set [NAME [VALUE]]. HISTFILE and HISTSIZE take effect immediately
+								var setArgs = SessionSettings.SplitArguments (builder.ToString ().TrimEnd ().TrimEnd (';'));
+								setArgs.RemoveAt (0);
+								Console.WriteLine ();
+								Console.WriteLine (sessionSettings.Set (setArgs).message);
+								History.Configure (sessionSettings.ResolveHistFile (optionsConfig.Database), sessionSettings.HistSize);
 								break;
 							case @"\dt":
 								if (string.IsNullOrEmpty (param) || param == "*") {
@@ -1084,6 +1096,11 @@ Informational
   \df[S]  [PATTERN]       list functions and stored procedures (PATTERN: name or schema.name, * wildcard)
   \sf     NAME            show the source of a function or stored procedure
   \sv     NAME            show the definition of a view
+
+Variables
+  \set [NAME [VALUE]]     set a variable, or list them with no arguments. also valid in ~/.messqlrc
+                          HISTFILE  where history is saved (default: ~/.messql_history). add -:DBNAME for a history per database
+                          HISTSIZE  how many history entries to keep (default: 500)
 
 Formatting
   \pset null [STRING]     set how NULL is displayed (default: empty). also valid in ~/.messqlrc
