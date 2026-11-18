@@ -30,6 +30,28 @@ public static class History
 	}
 
 	/// <summary>
+	/// like Configure, then if that points to a different file than before, swap the in-memory history for the new file's.
+	/// used when switching databases, so one database's history is never written into another's file
+	/// </summary>
+	public static void Reload (
+		string? path,
+		int maxSize
+	) {
+		string? newPath = string.IsNullOrWhiteSpace (path) ? null : path;
+		bool changed = newPath != _path;
+
+		if (changed) {
+			_history.Clear ();
+		}
+
+		Configure (path, maxSize);
+
+		if (changed) {
+			Load ();
+		}
+	}
+
+	/// <summary>
 	/// read the configured history file into memory, ahead of anything already in memory.
 	/// a missing file is fine, it is created the first time something is saved
 	/// </summary>

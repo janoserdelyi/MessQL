@@ -218,6 +218,7 @@ public class Program
 				bool showSource = false;
 				bool describeMatches = false;
 				bool describeIncludeDetail = false;
+				bool listExpanded = false;
 				string sourceName = string.Empty;
 
 				var input = Console.ReadKey (intercept: true);
@@ -506,10 +507,58 @@ public class Program
 								showSource = true;
 								executingQuery = $"select m.definition from sys.all_sql_modules m join sys.all_objects o on o.[object_id] = m.[object_id] where o.type = 'V' and m.[object_id] = OBJECT_ID('{sourceName.Replace ("'", "''")}');";
 								break;
+							case string listCmd when isListDatabasesCommand (listCmd):
+								// \l[x+] [PATTERN]. list databases. x = expanded output for this listing, + = additional detail
+								{
+									bool lPlus = listCmd.Contains ('+');
+									listExpanded = listCmd.Contains ('x');
+									executingQuery = buildListDatabasesQuery ((param ?? string.Empty).TrimEnd (';'), lPlus);
+								}
+
+								break;
+							case @"\c":
+							case @"\connect":
+								// \c[onnect] [DBNAME|-]. only the database can be changed. USER, HOST and PORT are accepted as "-" (keep) only
+								{
+									var connectArgs = SessionSettings.SplitArguments (builder.ToString ().TrimEnd ().TrimEnd (';'));
+									connectArgs.RemoveAt (0);
+									Console.WriteLine ();
+
+									if (connectArgs.Count == 0) {
+										Console.WriteLine (describeConnection (optionsConfig));
+										break;
+									}
+
+									if (connectArgs.Skip (1).Any (a => a != "-")) {
+										Console.WriteLine ("\\c only supports changing the database. usage: \\c [DBNAME|-]");
+										break;
+									}
+
+									string targetDatabase = connectArgs[0] == "-" ? optionsConfig.Database ?? string.Empty : connectArgs[0];
+									var targetBuilder = new SqlConnectionStringBuilder (connectionString) {
+										InitialCatalog = targetDatabase
+									};
+
+									string? connectError = tryConnect (targetBuilder.ConnectionString, out string? actualDatabase);
+									if (connectError != null) {
+										Console.WriteLine ($"connection to database \"{targetDatabase}\" failed: {connectError}");
+										Console.WriteLine ("Previous connection kept");
+										break;
+									}
+
+									connectionString = targetBuilder.ConnectionString;
+									optionsConfig.Database = actualDatabase ?? targetDatabase;
+									prompt = $"{optionsConfig.Database}=# ";
+									// with HISTFILE containing :DBNAME each database has its own history
+									History.Reload (sessionSettings.ResolveHistFile (optionsConfig.Database), sessionSettings.HistSize);
+									Console.WriteLine ($"You are now connected to database \"{optionsConfig.Database}\"{(string.IsNullOrEmpty (optionsConfig.User) ? string.Empty : $" as user \"{optionsConfig.User}\"")}.");
+								}
+
+								break;
 							case @"\conninfo":
 								// You are connected to database "nestiny" as user "nestinyadmin" on host "localhost" (address "::1") at port "54320".
 								Console.WriteLine ();
-								Console.WriteLine ($"You are connected to database \"{optionsConfig.Database}\" as user \"{optionsConfig.User}\" on host \"{optionsConfig.Host}\" at port \"{optionsConfig.Port}\".");
+								Console.WriteLine (describeConnection (optionsConfig));
 								break;
 							default:
 								Console.WriteLine ();
@@ -590,7 +639,7 @@ public class Program
 							} else if (tableDefinition == true) {
 								Console.WriteLine (displayTableDefinition (dataset, tableDefinitionName));
 							} else {
-								Console.WriteLine (displayResults (dataset.Tables[0], sessionSettings, expandedDisplay));
+								Console.WriteLine (displayResults (dataset.Tables[0], sessionSettings, expandedDisplay || listExpanded));
 							}
 
 							writeTiming (sessionSettings, stopwatch);
@@ -1054,6 +1103,61 @@ where
 		return query;
 	}
 
+	private static string describeConnection (
+		ConfigExtension config
+	) {
+		return $"You are connected to database \"{config.Database}\" as user \"{config.User}\" on host \"{config.Host}\" at port \"{config.Port}\".";
+	}
+
+	// opens a connection to prove it works. returns null on success, otherwise the error message
+	private static string? tryConnect (
+		string connectionString,
+		out string? databaseName
+	) {
+		databaseName = null;
+
+		try {
+			using var connection = new SqlConnection (connectionString);
+			connection.Open ();
+			databaseName = connection.Database;
+			return null;
+		} catch (SqlException oops) {
+			return oops.Message;
+		}
+	}
+
+	// \l, \l+, \lx, \lx+, \l+x (a trailing ';' is tolerated)
+	private static bool isListDatabasesCommand (
+		string cmd
+	) {
+		cmd = cmd.TrimEnd (';');
+
+		return cmd.Length >= 2
+			&& cmd.StartsWith (@"\l", StringComparison.Ordinal)
+			&& cmd.Skip (2).All (c => c == 'x' || c == '+')
+			&& cmd.Skip (2).Distinct ().Count () == cmd.Length - 2;
+	}
+
+	// sys.databases, with the same shape as psql's \l. sql server has no encoding, locale provider, or access privileges to speak of
+	private static string buildListDatabasesQuery (
+		string pattern,
+		bool detail
+	) {
+		string columns = "d.name as [Name], suser_sname (d.owner_sid) as [Owner], d.collation_name as [Collation], d.compatibility_level as [Compatibility], d.state_desc as [State], d.recovery_model_desc as [Recovery]";
+
+		if (detail) {
+			// total size of all files (data and log). pages are 8 kB. formatted like pg_size_pretty
+			columns += ", case when f.size_kb is null then null when f.size_kb < 10240 then cast (f.size_kb as varchar (20)) + ' kB' when f.size_kb < 10240 * 1024 then cast (f.size_kb / 1024 as varchar (20)) + ' MB' else cast (f.size_kb / 1024 / 1024 as varchar (20)) + ' GB' end as [Size], d.create_date as [Created], d.is_read_only as [Read only]";
+		}
+
+		string from = "sys.databases d";
+		if (detail) {
+			from += " left join (select database_id, sum (cast (size as bigint)) * 8 as size_kb from sys.master_files group by database_id) f on f.database_id = d.database_id";
+		}
+
+		return $"select {columns} from {from} where 1 = 1{likeClause ("d.name", pattern)} order by d.name;";
+	}
+
 	// builds an " and col = 'x'" / " and col like 'x%'" fragment. '*' is the wildcard. null/empty/'*' means no filter
 	private static string likeClause (
 		string column,
@@ -1088,6 +1192,7 @@ Help
 
 Informational
   (options: S = show system objects, + = additional detail)
+  \l[x+] [PATTERN]        list databases (x = expanded output, PATTERN: name, * wildcard)
   \d[S+]                  list tables, views, and sequences
   \d[S+]  NAME            describe table or view (NAME: name or schema.name, * wildcard to describe every match)
   \dt     [PATTERN]       describe tables
@@ -1107,7 +1212,8 @@ Formatting
   \x                      toggle expanded output
 
 Connection
-  \conninfo display information about current connection
+  \c[onnect] [DBNAME|-]   connect to a different database on the current server (USER, HOST, PORT not supported)
+  \conninfo               display information about current connection
 
 Operating System
   \timing [on|off]        toggle timing of commands

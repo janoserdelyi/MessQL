@@ -108,12 +108,14 @@ The following have been implemented in some form or fashion:
 - `\pset null [STRING]` how NULL is displayed for the current session (the only `\pset` option so far)
 - `\timing [on|off]` show how long each query took (`Time: 33.566 ms`). no argument toggles
 - `\d`, `\d+` basic definitions of tables and views. accepts `name` (assumes `dbo`) or `schema.name`; `*` wildcards (e.g. `\d dbo.*`, `\d dbo.cust*`) describe every matching table and view, system ones included
+- `\l`, `\l+`, `\lx` list databases. accepts a name pattern with `*` wildcards (e.g. `\l prod*`). `+` adds size and created date, `x` uses expanded output for that listing
 - `\dt` table definitions. handles wildcards
 - `\dn` schemas
 - `\dv`, `\dvS` list views. accepts `schema` or `schema.name`, handles wildcards. `S` includes system views; giving a pattern (e.g. `\dv information_schema.*`) includes them too, as in psql
 - `\df`, `\dfS` list functions and stored procedures. accepts `name` or `schema.name`, handles wildcards. `S` includes system objects
 - `\sf name` show the source of a function or stored procedure
 - `\sv name` show the definition of a view. accepts `name` or `schema.name`, works for system views like `information_schema.tables`
+- `\c [DBNAME]`, `\connect` connect to another database on the same server, with the same host, port and credentials. on failure the previous connection is kept. with no argument shows the connection info. USER, HOST and PORT are not supported yet. with a `:DBNAME` `HISTFILE` the history switches too
 - `\conninfo` connection info
 - multi-line queries
 - up/down arrow query history, saved to `HISTFILE` (see above)
