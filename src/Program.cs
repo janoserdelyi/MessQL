@@ -180,6 +180,10 @@ public class Program
 		Console.WriteLine (versionstring);
 		Console.WriteLine ();
 
+		// session display settings (\pset). ~/.messqlrc can set them up front
+		var printSettings = new PrintSettings ();
+		RcFile.Load (printSettings);
+
 	returnAfterExit:
 
 		string prompt = $"{optionsConfig.Database}=# ";
@@ -298,6 +302,13 @@ public class Program
 									expandedDisplay = false;
 								}
 
+								break;
+							case @"\pset":
+								// \pset OPTION [VALUE]. values may be quoted, so parse the whole entry rather than using param
+								var psetArgs = PrintSettings.SplitArguments (builder.ToString ().TrimEnd ().TrimEnd (';'));
+								psetArgs.RemoveAt (0);
+								Console.WriteLine ();
+								Console.WriteLine (printSettings.Pset (psetArgs).message);
 								break;
 							case @"\dt":
 								if (string.IsNullOrEmpty (param) || param == "*") {
@@ -489,6 +500,8 @@ public class Program
 
 						//goto start;
 						_ = builder.Clear ();
+						// a trailing ';' on a backslash command (e.g. "\pset null 'foo';") must not try to run the now-empty buffer as a query
+						lastNonWhiteSpaceCharacter = null;
 					}
 
 					// Enter can be for multi-line. check that the last non-whitespace character was a semi-colon.
@@ -554,7 +567,7 @@ public class Program
 							} else if (tableDefinition == true) {
 								Console.WriteLine (displayTableDefinition (dataset, tableDefinitionName));
 							} else {
-								Console.WriteLine (displayResults (dataset.Tables[0], expandedDisplay));
+								Console.WriteLine (displayResults (dataset.Tables[0], printSettings, expandedDisplay));
 							}
 						}
 
@@ -778,14 +791,16 @@ public class Program
 
 	private static string displayResults (
 		DataTable table,
+		PrintSettings settings,
 		bool expandedDisplay = false
 	) {
 
 		int windowwidth = Console.WindowWidth;
 		int rowcount = table.Rows.Count;
 		int columncount = table.Columns.Count;
+		string nullDisplay = settings.NullDisplay;
 
-		var columnDefs = new ColumnDefinitions (table, windowwidth);
+		var columnDefs = new ColumnDefinitions (table, windowwidth, nullDisplay);
 
 		var sb = new StringBuilder ();
 
@@ -801,7 +816,7 @@ public class Program
 				string[] names = columnDefs.Columns.ToList<ColumnConfig> ().Select ((el) => { return el.Name.PadRight (widestnamewidth); }).ToArray<string> ();
 
 				for (int i = 0; i < row.ItemArray.Length; i++) {
-					_ = sb.Append (names[i]).Append (" | ").Append (SafeTruncAndPad (row.ItemArray[i]?.ToString (), datawidth)).Append (Environment.NewLine);
+					_ = sb.Append (names[i]).Append (" | ").Append (SafeTruncAndPad (ColumnDefinitions.FormatValue (row.ItemArray[i], nullDisplay), datawidth)).Append (Environment.NewLine);
 				}
 
 				rownum++;
@@ -818,7 +833,7 @@ public class Program
 						_ = sb.Append (" | ");
 					}
 
-					_ = sb.Append (SafeTruncAndPad (row.ItemArray[i]?.ToString (), columnDefs.Columns[i].Width));
+					_ = sb.Append (SafeTruncAndPad (ColumnDefinitions.FormatValue (row.ItemArray[i], nullDisplay), columnDefs.Columns[i].Width));
 				}
 
 				_ = sb.Append (Environment.NewLine);
@@ -1038,14 +1053,18 @@ Help
 
 Informational
 	(options: S = show system objects, + = additional detail)
-  	\d[S+]                  list tables, views, and sequences
-  	\d[S+]  NAME            describe table or view (NAME: name or schema.name, * wildcard to describe every match)
+	\d[S+]                  list tables, views, and sequences
+	\d[S+]  NAME            describe table or view (NAME: name or schema.name, * wildcard to describe every match)
 	\dt     [PATTERN]       describe tables
 	\dn     [PATTERN]       list schemas
 	\dv[S]  [PATTERN]       list views (PATTERN: schema, or schema.name, * wildcard; a pattern includes system views)
 	\df[S]  [PATTERN]       list functions and stored procedures (PATTERN: name or schema.name, * wildcard)
 	\sf     NAME            show the source of a function or stored procedure
 	\sv     NAME            show the definition of a view
+
+Formatting
+	\pset null [STRING]     set how NULL is displayed (default: empty). also valid in ~/.messqlrc
+	\x                      toggle expanded output
 
 Connection
   \conninfo display information about current connection
