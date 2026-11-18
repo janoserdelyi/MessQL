@@ -2,7 +2,7 @@ namespace mssqlcli;
 
 /// <summary>
 /// reads ~/.messqlrc, in the spirit of psql's ~/.psqlrc. one command per line.
-/// blank lines and "--" comments are ignored. currently the supported commands are \pset and \timing
+/// blank lines and "--" comments are ignored. currently the supported commands are \pset, \timing and \set
 /// </summary>
 public static class RcFile
 {
@@ -49,6 +49,9 @@ public static class RcFile
 					break;
 				case @"\timing":
 					result = settings.SetTiming (args);
+					break;
+				case @"\set":
+					result = settings.Set (args);
 					break;
 				default:
 					Console.WriteLine ($"{path}:{i + 1}: command {cmd} is not supported in {FILE_NAME}. skipping");

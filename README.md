@@ -74,12 +74,26 @@ host:port:database:user:password
 
 Depending one which values you provide to the `MessQL` binary, it will seek to match values in `.mssqlpass` and will use the first matching line's values.
 
-`MessQL` also reads `~/.messqlrc` on startup, in the spirit of psql's `.psqlrc`: one backslash command per line, blank lines and `--` comments ignored. Currently `\pset` and `\timing` are supported there. For example, to always display NULL as `∅` and show query timings:
+`MessQL` also reads `~/.messqlrc` on startup, in the spirit of psql's `.psqlrc`: one backslash command per line, blank lines and `--` comments ignored. Currently `\pset`, `\timing` and `\set` are supported there. For example, to always display NULL as `∅` and show query timings:
 
 ```
 \pset null '∅'
 \timing on
 ```
+
+### Command history
+
+Queries are saved to disk so up/down arrow history survives restarts, in the same format psql uses (`_HiStOrY_V2_`, one entry per line, multi-line queries stored on a single line and restored as multi-line). Two variables control it, set with `\set` or persisted in `~/.messqlrc`:
+
+- `HISTFILE` where history is saved. defaults to `~/.messql_history`. end it with `-:DBNAME` to keep a separate history per database, e.g. `\set HISTFILE ~/.messql_history-:DBNAME`. setting it to `/dev/null` turns saving off
+- `HISTSIZE` how many entries are kept. defaults to `500`. a negative number means no limit
+
+```
+\set HISTFILE ~/.messql_history-:DBNAME
+\set HISTSIZE 1000
+```
+
+`\set` on its own lists the current values. `\set HISTFILE` or `\set HISTSIZE` without a value goes back to the default.
 
 ## Implemented features
 
@@ -102,7 +116,7 @@ The following have been implemented in some form or fashion:
 - `\sv name` show the definition of a view. accepts `name` or `schema.name`, works for system views like `information_schema.tables`
 - `\conninfo` connection info
 - multi-line queries
-- still working out up/down arrow query history
+- up/down arrow query history, saved to `HISTFILE` (see above)
 - backspace
 - still working on keyboard shortcuts for getting around and in-line editing, like left-right arrows
 
