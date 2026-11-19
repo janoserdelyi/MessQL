@@ -188,6 +188,9 @@ public class Program
 		History.Configure (sessionSettings.ResolveHistFile (optionsConfig.Database), sessionSettings.HistSize);
 		History.Load ();
 
+		// schema and table names for tab completion
+		loadCatalog (connectionString);
+
 	returnAfterExit:
 
 		string prompt = $"{optionsConfig.Database}=# ";
@@ -232,8 +235,8 @@ public class Program
 						builder.Remove (cursor - 1, 1);
 						cursor--;
 
-						if (cursor == builder.Length && !isLineBreak (before[cursor])) {
-							// deleting the last character on a line. no need to redraw
+						if (cursor == builder.Length && !isLineBreak (before[cursor]) && before[cursor] != '\t') {
+							// deleting the last character on a line. no need to redraw. (a tab is drawn several columns wide, so it does need one)
 							Console.Write ("\b \b");
 						} else {
 							redrawInput (before, cursor + 1, builder.ToString (), cursor, prompt);
@@ -549,6 +552,7 @@ public class Program
 									connectionString = targetBuilder.ConnectionString;
 									optionsConfig.Database = actualDatabase ?? targetDatabase;
 									prompt = $"{optionsConfig.Database}=# ";
+									loadCatalog (connectionString);
 									// with HISTFILE containing :DBNAME each database has its own history
 									History.Reload (sessionSettings.ResolveHistFile (optionsConfig.Database), sessionSettings.HistSize);
 									Console.WriteLine ($"You are now connected to database \"{optionsConfig.Database}\"{(string.IsNullOrEmpty (optionsConfig.User) ? string.Empty : $" as user \"{optionsConfig.User}\"")}.");
@@ -600,6 +604,11 @@ public class Program
 							var stopwatch = System.Diagnostics.Stopwatch.StartNew ();
 							_ = adapter.Fill (dataset);
 							stopwatch.Stop ();
+
+							// new, dropped or altered tables should show up in tab completion
+							if (isSchemaChange (executingQuery)) {
+								loadCatalog (connectionString);
+							}
 
 							if (dataset.Tables.Count == 0) {
 								Console.WriteLine ("no results found");
@@ -659,10 +668,40 @@ public class Program
 				}
 
 				if (input.Key == ConsoleKey.Tab) {
-					// tab completion?
+					var completion = Completer.Complete (currentInput, cursor);
 
-					// for now allow tabs in formatting queries
-					//continue;
+					// nothing to complete. at the end of a line that means do nothing (no stray tabs trailing the query). elsewhere
+					// (eg. the middle of a line) fall through and insert a literal tab, so tabs still work for formatting queries
+					if (completion == null && (cursor == currentInput.Length || isLineBreak (currentInput[cursor]))) {
+						continue;
+					}
+
+					if (completion != null) {
+						string typedWord = currentInput[completion.Start..cursor];
+
+						if (completion.Replacement.Length > typedWord.Length) {
+							string completedText = string.Concat (currentInput.AsSpan (0, completion.Start), completion.Replacement, currentInput.AsSpan (completion.End));
+							int completedCursor = completion.Start + completion.Replacement.Length;
+
+							_ = builder.Clear ();
+							_ = builder.Append (completedText);
+							redrawInput (currentInput, cursor, completedText, completedCursor, prompt);
+							cursor = completedCursor;
+						} else {
+							// ambiguous and nothing more to add. list the options (like psql), then redraw the entry beneath them
+							moveCursor (currentInput, cursor, currentInput.Length, prompt);
+							Console.WriteLine ();
+							const int MAX_OPTIONS = 100;
+							Console.WriteLine (string.Join ("  ", completion.Options.Take (MAX_OPTIONS)));
+							if (completion.Options.Count > MAX_OPTIONS) {
+								Console.WriteLine ($"... and {completion.Options.Count - MAX_OPTIONS} more. type a few more letters to narrow it down");
+							}
+
+							redrawInput (string.Empty, 0, currentInput, cursor, prompt);
+						}
+
+						continue;
+					}
 				}
 
 				if (input.Key == ConsoleKey.UpArrow) {
@@ -786,6 +825,8 @@ public class Program
 		return i;
 	}
 
+	private const int TAB_WIDTH = 8;
+
 	// place the cursor on screen at the index. top is the screen row of the entry's first line
 	private static void setCursor (
 		string text,
@@ -794,7 +835,12 @@ public class Program
 		string prompt
 	) {
 		int row = lineIndex (text, index);
-		int col = prompt.Length + index - lineStart (text, index);
+		int col = prompt.Length;
+		for (int i = lineStart (text, index); i < index; i++) {
+			// a tab jumps to the next multiple of 8, like the terminal draws it
+			col = text[i] == '\t' ? ((col / TAB_WIDTH) + 1) * TAB_WIDTH : col + 1;
+		}
+
 		Console.SetCursorPosition (Math.Min (col, Console.BufferWidth - 1), top + row);
 	}
 
@@ -861,6 +907,43 @@ public class Program
 		_ = builder.Append (replacement);
 		redrawInput (oldText, cursor, replacement, replacement.Length, prompt);
 		cursor = replacement.Length;
+	}
+
+	// tables and views of the current database, for tab completion. completion is a convenience so any failure just
+	// leaves the previous (or an empty) catalog in place
+	private static void loadCatalog (
+		string connectionString
+	) {
+		try {
+			var objects = new List<(string Schema, string Name)> ();
+
+			using var connection = new SqlConnection (connectionString);
+			connection.Open ();
+
+			using var command = new SqlCommand (
+				"select s.name, o.name from sys.objects o inner join sys.schemas s on s.schema_id = o.schema_id where o.type in ('U', 'V') and o.is_ms_shipped = 0 order by s.name, o.name;",
+				connection
+			);
+			using var reader = command.ExecuteReader ();
+			while (reader.Read ()) {
+				objects.Add ((reader.GetString (0), reader.GetString (1)));
+			}
+
+			Completer.SetCatalog (objects);
+		} catch (SqlException) {
+			// keep whatever we had
+		}
+	}
+
+	private static bool isSchemaChange (
+		string query
+	) {
+		string trimmed = query.TrimStart ();
+
+		return trimmed.StartsWith ("create ", StringComparison.OrdinalIgnoreCase)
+			|| trimmed.StartsWith ("drop ", StringComparison.OrdinalIgnoreCase)
+			|| trimmed.StartsWith ("alter ", StringComparison.OrdinalIgnoreCase)
+			|| (trimmed.StartsWith ("exec", StringComparison.OrdinalIgnoreCase) && trimmed.Contains ("sp_rename", StringComparison.OrdinalIgnoreCase));
 	}
 
 	// \timing : "Time: 33.566 ms"
