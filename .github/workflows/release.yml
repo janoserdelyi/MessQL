@@ -315,3 +315,57 @@ jobs:
           echo "### ℹ️ Nothing to Release" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "No commits found since the last tag. Nothing to release." >> $GITHUB_STEP_SUMMARY
+
+  package:
+    name: Package ${{ matrix.rid }}
+    needs: release
+    if: inputs.dry_run != true && needs.release.outputs.tag != ''
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        rid:
+          - win-x64
+          - linux-x64
+          - linux-arm64
+          - osx-x64
+          - osx-arm64
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish self-contained executable
+        env:
+          RID: ${{ matrix.rid }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          dotnet publish src/MessQL.csproj \
+            -c Release \
+            -r "$RID" \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:DebugType=none \
+            -p:DebugSymbols=false \
+            -p:Version="$VERSION" \
+            -o publish
+
+      - name: Create archive
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          cd publish
+          zip -r "../MessQL-${RID}.zip" .
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+          RID: ${{ matrix.rid }}
+        run: gh release upload "$TAG" "MessQL-${RID}.zip"

@@ -19,6 +19,21 @@ The second thing is that in my head i tend to pronounce "MSSQL" as "MessQL"
 
 ## Installing
 
+### Download a release
+
+Download the ZIP for your operating system and CPU from the
+[latest release](https://github.com/janoserdelyi/MessQL/releases/latest):
+
+- Windows x64: `MessQL-win-x64.zip`
+- Linux x64 or ARM64: `MessQL-linux-x64.zip` or `MessQL-linux-arm64.zip`
+- macOS Intel or Apple Silicon: `MessQL-osx-x64.zip` or `MessQL-osx-arm64.zip`
+
+Extract the ZIP and run `MessQL.exe` on Windows or `./MessQL` on Linux or macOS.
+These builds include the .NET runtime; you don't need to install .NET or compile
+the project. The operating system's native dependencies are still required.
+
+### Build from source
+
 Requires the .NET 10 SDK to build.
 
 Publish a build to a fixed location (re-run this after pulling code changes):
