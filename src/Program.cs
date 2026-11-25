@@ -62,6 +62,12 @@ public class Program
 			DefaultValueFactory = _ => false
 		};
 
+		// psql already uses -a (--echo-all), so the alias is -N
+		var aliasOption = new Option<string> ("--alias", "-N") {
+			Description = "connect using an alias from ~/.mssqlpass. -d, -h, -p and -u override its values"
+		};
+
+		rootCommand.Options.Add (aliasOption);
 		rootCommand.Options.Add (dbnameOption);
 		rootCommand.Options.Add (hostOption);
 		rootCommand.Options.Add (portOption);
@@ -75,12 +81,24 @@ public class Program
 
 		var optionsConfig = new ConfigExtension ();
 
+		// which of these were typed, as opposed to defaulted. an alias only fills in the ones that weren't
+		bool hostGiven = false;
+		bool portGiven = false;
+		bool userGiven = false;
+		bool databaseGiven = false;
+
 		rootCommand.SetAction (parseResult => {
+			optionsConfig.Alias = parseResult.GetValue (aliasOption)?.Trim ();
 			optionsConfig.Database = parseResult.GetValue (dbnameOption)?.Trim ();
 			optionsConfig.Host = parseResult.GetValue (hostOption)?.Trim ();
 			optionsConfig.Port = parseResult.GetValue (portOption);
 			optionsConfig.User = parseResult.GetValue (usernameOption)?.Trim ();
 			optionsConfig.PasswordPrompt = parseResult.GetValue (passwordpromptOption);
+
+			hostGiven = parseResult.GetResult (hostOption) is { Implicit: false };
+			portGiven = parseResult.GetResult (portOption) is { Implicit: false };
+			userGiven = parseResult.GetResult (usernameOption) is { Implicit: false };
+			databaseGiven = parseResult.GetResult (dbnameOption) is { Implicit: false };
 		});
 
 		int commandParseResult = rootCommand.Parse (args).Invoke ();
@@ -93,7 +111,45 @@ public class Program
 		// look for matches in the config. first match is what gets used
 		Config? matchingConfig = null;
 
-		if (configs != null && configs.Count > 0) {
+		if (!string.IsNullOrEmpty (optionsConfig.Alias)) {
+			var aliasConfig = configs?.FirstOrDefault (c => string.Equals (c.Alias, optionsConfig.Alias, StringComparison.Ordinal));
+
+			if (aliasConfig == null) {
+				Console.WriteLine ($"alias `{optionsConfig.Alias}` was not found in ~/.mssqlpass");
+
+				var known = configs?.Where (c => c.Alias != null).Select (c => c.Alias!).ToList ();
+				if (known != null && known.Count > 0) {
+					Console.WriteLine ($"known aliases: {string.Join (", ", known)}");
+				}
+
+				return 1;
+			}
+
+			// the alias supplies whatever wasn't typed. typed options win
+			if (!hostGiven && !string.IsNullOrEmpty (aliasConfig.Host)) {
+				optionsConfig.Host = aliasConfig.Host;
+			}
+
+			if (!portGiven && aliasConfig.Port != null) {
+				optionsConfig.Port = aliasConfig.Port;
+			}
+
+			if (!databaseGiven && !string.IsNullOrEmpty (aliasConfig.Database)) {
+				optionsConfig.Database = aliasConfig.Database;
+			}
+
+			if (!userGiven) {
+				optionsConfig.User = aliasConfig.User;
+			}
+
+			// the alias's password goes only to the server and user it was written for. if either
+			// was overridden, fall through to the regular matching below (and a prompt if nothing matches)
+			if (!hostGiven && !portGiven && !userGiven) {
+				matchingConfig = aliasConfig;
+			}
+		}
+
+		if (matchingConfig == null && configs != null && configs.Count > 0) {
 			foreach (var config in configs) {
 				if (config.Database != optionsConfig.Database) {
 					continue;
@@ -1303,9 +1359,39 @@ Operating System
 ";
 	}
 
+	// splits a .mssqlpass line on ':'. like .pgpass, "\:" is a literal colon and "\\" is a literal backslash.
+	// a backslash before anything else is kept as is, so passwords that already hold one keep working
+	private static string[] splitPassLine (
+		string line
+	) {
+		var parts = new List<string> ();
+		var current = new StringBuilder ();
+
+		for (int i = 0; i < line.Length; i++) {
+			char c = line[i];
+
+			if (c == '\\' && i + 1 < line.Length && (line[i + 1] == ':' || line[i + 1] == '\\')) {
+				_ = current.Append (line[i + 1]);
+				i++;
+			} else if (c == ':') {
+				parts.Add (current.ToString ());
+				_ = current.Clear ();
+			} else {
+				_ = current.Append (c);
+			}
+		}
+
+		parts.Add (current.ToString ());
+
+		return [.. parts];
+	}
+
 	private static List<Config>? parseConfig () {
-		// in the spirit of .pgpass - formatted as :
-		// host:port:database:user:password
+		// in the spirit of .pgpass, with an alias bolted on the front :
+		// alias:host:port:database:user:password
+		// a line with no alias starts with the ':' separator. see .mssqlpass.example
+		//
+		// the earlier 5 part format (host:port:database:user:password) is still read, as a line with no alias
 
 		string homedir = Environment.GetFolderPath (Environment.SpecialFolder.UserProfile);
 		const string PASS_FILE = ".mssqlpass";
@@ -1324,29 +1410,41 @@ Operating System
 
 		foreach (string line in configlines) {
 
-			// don't parse comments
-			if (line.StartsWith ('#')) {
+			// don't parse comments or blank lines
+			if (line.StartsWith ('#') || string.IsNullOrWhiteSpace (line)) {
 				continue;
 			}
 
-			string[] parts = line.Split (':');
+			string[] parts = splitPassLine (line);
 
-			if (parts.Length != 5) {
-				Console.WriteLine ($"line `{line}` is not valid. not enough parts. skipping");
+			// never echo a whole line. it holds a password
+			if (parts.Length != 5 && parts.Length != 6) {
+				Console.WriteLine ($"a {PASS_FILE} line with {parts.Length} parts is not valid. expected alias:host:port:database:user:password. skipping");
 				continue;
 			}
 
-			if (!int.TryParse (parts[1], out var port)) {
-				Console.WriteLine ($"port `{parts[1]}` does not convert to an integer. skipping");
-				continue;
+			// 5 parts is the earlier format with no alias
+			string alias = parts.Length == 6 ? parts[0].Trim () : string.Empty;
+			string[] values = parts.Length == 6 ? parts[1..] : parts;
+
+			// an alias line may leave the port blank and get the default. a line without one must say
+			int? port = null;
+			if (values[1].Length > 0 || alias.Length == 0) {
+				if (!int.TryParse (values[1], out int parsedPort)) {
+					Console.WriteLine ($"port `{values[1]}` does not convert to an integer. skipping");
+					continue;
+				}
+
+				port = parsedPort;
 			}
 
 			configs.Add (new Config () {
-				Host = parts[0],
+				Alias = alias.Length == 0 ? null : alias,
+				Host = values[0],
 				Port = port,
-				Database = parts[2],
-				User = parts[3],
-				Password = parts[4]
+				Database = values[2],
+				User = values[3],
+				Password = values[4]
 			});
 		}
 

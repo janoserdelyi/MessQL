@@ -1,0 +1,66 @@
+# ~/.mssqlpass  -  connection aliases and credentials for MessQL
+#
+# MessQL reads this file from your home directory. It is modelled on PostgreSQL's .pgpass,
+# with an alias added as the first field. Lock it down, it holds passwords:
+#
+#     chmod 600 ~/.mssqlpass
+#
+# FORMAT
+#
+#     alias:host:port:database:user:password
+#
+# One connection per line. There are always 6 fields separated by ':'.
+#
+#   alias     a name you pass to -N/--alias, e.g. `messql -N dev`. Optional. When a line has
+#             no alias the field is empty, so the line STARTS WITH ':'.
+#   host      server name or address
+#   port      TCP port. On an alias line it may be left empty to mean 1433
+#   database  database to connect to. May be empty
+#   user      SQL login. Leave EMPTY for integrated (Kerberos) security, no password is used
+#   password  the SQL login's password. Leave EMPTY to be prompted for it
+#
+# Blank lines and lines starting with '#' are ignored.
+#
+# ESCAPING
+#
+# ':' is the separator, so a field that contains one must escape it with a backslash, like .pgpass.
+# A literal backslash is written '\\'. A backslash before any other character is kept as is.
+#
+#     password  p:ss     is written   p\:ss
+#     password  p\ss     is written   p\\ss  (a lone p\ss also works)
+#
+# USING AN ALIAS
+#
+#     messql -N dev
+#     messql -N dev -d otherdb      -d, -h, -p and -u override what the alias says
+#
+# Any option you type wins over the alias. The alias's password is only sent to the host,
+# port and user it is written for: if you override -h, -p or -u it is not used.
+#
+# WITHOUT AN ALIAS
+#
+# Lines without an alias are still used when you connect with -h/-p/-d/-u. MessQL uses the first
+# line whose host, port and database match (and user, if you gave -u).
+#
+# The earlier 5 field format (host:port:database:user:password) is still read and is treated
+# as a line with no alias.
+#
+# EXAMPLES  (these are made up, edit or delete them)
+
+# alias, SQL login with a stored password
+dev:dev-sql.example.com:1433:appdb:app_user:change-me
+
+# alias, SQL login, no password stored. you are prompted
+staging:stg-sql.example.com:1433:appdb:app_user:
+
+# alias, integrated (Kerberos) security. empty user, no password
+production-asap:prod-sql.example.com:1433:asapsql::
+
+# alias with the port left empty, so 1433, on a local server and no database chosen
+local:localhost::::
+
+# no alias. note the leading ':'
+:other-sql.example.com:1433:reports:report_user:change-me
+
+# a password containing a colon (the password here is  pa:ss:word )
+vault:vault-sql.example.com:1433:appdb:app_user:pa\:ss\:word

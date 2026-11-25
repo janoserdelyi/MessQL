@@ -71,6 +71,7 @@ Usage:
   MessQL [options]
 
 Options:
+  -N, --alias <alias>        connect using an alias from ~/.mssqlpass. -d, -h, -p and -u override its values
   -d, --dbname <dbname>      database name to connect to
   -h, --host <host>          database server host [default: locahost]
   -p, --port <port>          database server port (default: "1433") [default: 1433]
@@ -80,14 +81,32 @@ Options:
   -?, -h, --help             Show help and usage information
 ```
 
-`MessQL` will look for `~/.mssqlpass`. For those familiar with PostgereSQL's `.pgpass`, it follows the same format.
+`MessQL` will look for `~/.mssqlpass`. For those familiar with PostgereSQL's `.pgpass`, it follows the same format, with an alias added as the first field.
 You can have any number of lines in the config with each config formatted as
 
 ```
-host:port:database:user:password
+alias:host:port:database:user:password
 ```
 
-Depending one which values you provide to the `MessQL` binary, it will seek to match values in `.mssqlpass` and will use the first matching line's values.
+A line with no alias leaves the first field empty, so it starts with `:`
+
+```
+dev:dev-sql.example.com:1433:appdb:app_user:change-me
+:other-sql.example.com:1433:reports:report_user:change-me
+```
+
+An empty `user` means integrated (Kerberos) security. An empty `password` means you are prompted for it. Blank lines and `#` comments are ignored. As in `.pgpass`, escape a literal `:` in any field with `\:` and a literal backslash with `\\` (a password of `pa:ss` is written `pa\:ss`). The older 5 field format (no alias) is still read.
+[.mssqlpass.example](.mssqlpass.example) is a commented copy you can start from: `cp .mssqlpass.example ~/.mssqlpass && chmod 600 ~/.mssqlpass`
+
+Connect with an alias using `-N` (`-a` is taken by psql's `--echo-all`, so it was avoided):
+
+```
+messql -N dev
+```
+
+Options you type win over the alias, e.g. `messql -N dev -d otherdb`. The alias's password is only used for the host, port and user it was written for, so overriding `-h`, `-p` or `-u` means it is not sent.
+
+Without an alias, depending on which values you provide to the `MessQL` binary, it will seek to match values in `.mssqlpass` and will use the first matching line's values.
 
 `MessQL` also reads `~/.messqlrc` on startup, in the spirit of psql's `.psqlrc`: one backslash command per line, blank lines and `--` comments ignored. Currently `\pset`, `\timing` and `\set` are supported there. For example, to always display NULL as `∅` and show query timings:
 
